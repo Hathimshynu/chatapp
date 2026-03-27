@@ -80,39 +80,69 @@ export default function ChatBox({ conversation, onBack }) {
   }, [messages]);
 
   // ✅ Pusher — receive messages + seen ticks
-  useEffect(() => {
-    if (!channel || !conversation) return;
+useEffect(() => {
+  if (!channel || !conversation) return;
 
-    channel.bind("new-message", ({ message, conversationId }) => {
-      if (
-        conversation._id === conversationId ||
-        conversation._id?.startsWith("temp")
-      ) {
-        setMessages((prev) => {
-          const exists = prev.find((m) => m._id === message._id);
-          if (exists) return prev;
-          return [...prev, message];
+  channel.bind('new-message', async (payload) => {
+    const {
+      messageId, conversationId, hasImage,
+      text, sender, createdAt, seen, messageType
+    } = payload;
+
+    // Only handle if this conversation
+    if (
+      conversation._id !== conversationId &&
+      !conversation._id?.startsWith('temp')
+    ) return;
+
+    if (hasImage) {
+      // ✅ Fetch full message with image from API
+      try {
+        const { data } = await axios.get(`/api/messages/single/${messageId}`, {
+          headers: { Authorization: `Bearer ${user.token}` }
         });
+        setMessages(prev => {
+          if (prev.find(m => m._id === data._id)) return prev;
+          return [...prev, data];
+        });
+      } catch (err) {
+        console.error('fetch single message error:', err);
       }
-    });
+    } else {
+      // ✅ Text message — use payload directly
+      setMessages(prev => {
+        if (prev.find(m => m._id === messageId)) return prev;
+        return [...prev, {
+          _id: messageId,
+          conversationId,
+          text,
+          sender,
+          createdAt,
+          seen,
+          messageType: messageType || 'text',
+        }];
+      });
+    }
+  });
 
-    channel.bind("messages-seen", ({ conversationId }) => {
-      if (conversation._id === conversationId) {
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.sender?._id === user._id || msg.sender === user._id
-              ? { ...msg, seen: [user._id, "receiver"] }
-              : msg,
-          ),
-        );
-      }
-    });
+  // ✅ Double tick — messages seen
+  channel.bind('messages-seen', ({ conversationId }) => {
+    if (conversation._id === conversationId) {
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.sender?._id === user._id || msg.sender === user._id
+            ? { ...msg, seen: [user._id, 'receiver'] }
+            : msg
+        )
+      );
+    }
+  });
 
-    return () => {
-      channel.unbind("new-message");
-      channel.unbind("messages-seen");
-    };
-  }, [channel, conversation?._id]);
+  return () => {
+    channel.unbind('new-message');
+    channel.unbind('messages-seen');
+  };
+}, [channel, conversation?._id]);
 
   // ✅ Socket — typing only
   useEffect(() => {
@@ -148,49 +178,90 @@ export default function ChatBox({ conversation, onBack }) {
     }, 1500);
   };
 
-  const sendMessage = async () => {
-    if (!text.trim() || !otherUser?._id) return;
-    const msgText = text.trim();
-    setText("");
-    try {
-      const { data } = await axios.post(
-        "/api/messages/send",
-        {
-          receiverId: otherUser._id,
-          text: msgText,
-          replyTo: replyTo?._id || null,
-        },
-        { headers: { Authorization: `Bearer ${user.token}` } },
-      );
-      setMessages((prev) => [...prev, data.message]);
-      setReplyTo(null);
-      socket?.emit("stopTyping", { receiverId: otherUser._id });
-    } catch (err) {
-      console.error(err);
-      setText(msgText);
+ const sendMessage = async () => {
+  if (!text.trim() || !otherUser?._id) return;
+  const msgText = text.trim();
+  setText('');
+  setReplyTo(null);
+
+  try {
+    const { data } = await axios.post(
+      '/api/messages/send',
+      {
+        receiverId: otherUser._id,
+        text: msgText,
+        replyTo: replyTo?._id || null
+      },
+      { headers: { Authorization: `Bearer ${user.token}` } }
+    );
+
+    // ✅ data.message contains the full populated message
+    if (data.message) {
+      setMessages(prev => {
+        if (prev.find(m => m._id === data.message._id)) return prev;
+        return [...prev, data.message];
+      });
     }
-  };
+
+    socket?.emit('stopTyping', { receiverId: otherUser._id });
+  } catch (err) {
+    console.error('sendMessage error:', err);
+    setText(msgText); // restore text on error
+  }
+};
 
   const handleImageUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file || !otherUser?._id) return;
-    setShowAttachMenu(false);
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      try {
-        const { data } = await axios.post(
-          "/api/messages/send",
-          { receiverId: otherUser._id, text: "", image: reader.result },
-          { headers: { Authorization: `Bearer ${user.token}` } },
-        );
-        setMessages((prev) => [...prev, data.message]);
-      } catch (err) {
-        console.error(err);
+  const file = e.target.files[0];
+  if (!file || !otherUser?._id) return;
+  setShowAttachMenu(false);
+  const reader = new FileReader();
+  reader.onloadend = async () => {
+    try {
+      const { data } = await axios.post(
+        '/api/messages/send',
+        { receiverId: otherUser._id, text: '', image: reader.result },
+        { headers: { Authorization: `Bearer ${user.token}` } }
+      );
+      // ✅ data.message
+      if (data.message) {
+        setMessages(prev => {
+          if (prev.find(m => m._id === data.message._id)) return prev;
+          return [...prev, data.message];
+        });
       }
-    };
-    reader.readAsDataURL(file);
-    e.target.value = "";
+    } catch (err) {
+      console.error(err);
+    }
   };
+  reader.readAsDataURL(file);
+  e.target.value = '';
+};
+
+const sendSticker = async (sticker) => {
+  setShowStickerPicker(false);
+  if (!otherUser?._id) return;
+  try {
+    const { data } = await axios.post(
+      '/api/messages/send',
+      {
+        receiverId: otherUser._id,
+        text: '',
+        image: sticker.url,
+        messageType: 'sticker'
+      },
+      { headers: { Authorization: `Bearer ${user.token}` } }
+    );
+    // ✅ data.message
+    if (data.message) {
+      setMessages(prev => {
+        if (prev.find(m => m._id === data.message._id)) return prev;
+        return [...prev, data.message];
+      });
+    }
+  } catch (err) {
+    console.error(err);
+  }
+};
 
   const handleEmojiClick = (emoji) => {
     setText((prev) => prev + emoji);
@@ -206,25 +277,6 @@ export default function ChatBox({ conversation, onBack }) {
     });
   };
 
-  const sendSticker = async (sticker) => {
-    setShowStickerPicker(false);
-    if (!otherUser?._id) return;
-    try {
-      const { data } = await axios.post(
-        "/api/messages/send",
-        {
-          receiverId: otherUser._id,
-          text: "",
-          image: sticker.url,
-          messageType: "sticker",
-        },
-        { headers: { Authorization: `Bearer ${user.token}` } },
-      );
-      setMessages((prev) => [...prev, data.message]);
-    } catch (err) {
-      console.error(err);
-    }
-  };
 
   // ── Empty / Welcome state ──────────────────────────────────────────
   if (!conversation) {

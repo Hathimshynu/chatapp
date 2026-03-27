@@ -7,7 +7,7 @@ const getConversations = async (req, res) => {
     const conversations = await Conversation.find({
       participants: req.user._id
     })
-      .populate('participants', '-password')  // ✅ includes avatar
+      .populate('participants', '-password')
       .populate({
         path: 'lastMessage',
         populate: { path: 'sender', select: 'name avatar' }
@@ -32,9 +32,9 @@ const getMessages = async (req, res) => {
 
     const messages = await Message.find({
       conversationId: req.params.conversationId
-    }).populate('sender', 'name avatar');  // ✅ includes avatar
+    }).populate('sender', 'name avatar');
 
-    // Mark as seen + trigger seen event
+    // Mark as seen
     const unseenMessages = await Message.find({
       conversationId: req.params.conversationId,
       sender: { $ne: req.user._id },
@@ -66,7 +66,7 @@ const getMessages = async (req, res) => {
 
 const sendMessage = async (req, res) => {
   try {
-    const { receiverId, text, image, messageType } = req.body;  // ✅ include messageType
+    const { receiverId, text, image, messageType } = req.body;
 
     if (!receiverId) {
       return res.status(400).json({ message: 'Receiver is required' });
@@ -89,7 +89,7 @@ const sendMessage = async (req, res) => {
       sender: req.user._id,
       text: text || '',
       image: image || '',
-      messageType: messageType || 'text',  // ✅ save messageType
+      messageType: messageType || 'text',
       seen: [req.user._id]
     });
 
@@ -100,29 +100,52 @@ const sendMessage = async (req, res) => {
 
     const populatedMessage = await message.populate('sender', 'name avatar');
 
-    // ✅ Pusher — send to receiver
-    pusher.trigger(`user-${receiverId}`, 'new-message', {
-      message: populatedMessage,
+    // ✅ Check if avatar is base64 — if so don't send through Pusher
+    const senderAvatarIsBase64 = (req.user.avatar || '').startsWith('data:');
+
+    // ✅ Pusher payload — STRICT 10KB limit
+    // Never include: image data, base64 avatars, large text
+    const pusherPayload = {
+      messageId:      populatedMessage._id.toString(),
       conversationId: conversation._id.toString(),
+      text:           (text || '').slice(0, 500), // max 500 chars
+      hasImage:       !!(image),
+      messageType:    messageType || 'text',
+      createdAt:      populatedMessage.createdAt,
+      seen:           populatedMessage.seen,
       sender: {
-        _id: req.user._id,
-        name: req.user.name,
-        avatar: req.user.avatar  // ✅ include avatar
+        _id:    req.user._id.toString(),
+        name:   (req.user.name || '').slice(0, 50),
+        // ✅ Only send avatar if it's a URL not base64
+        avatar: senderAvatarIsBase64 ? '' : (req.user.avatar || '')
       }
-    });
+    };
+    const payloadSize = JSON.stringify(pusherPayload).length;
+    console.log('Pusher payload size:', payloadSize, 'bytes');
 
-    // ✅ Pusher — update sender sidebar
-    pusher.trigger(`user-${req.user._id}`, 'message-sent', {
-      message: populatedMessage,
-      conversationId: conversation._id.toString()
-    });
+    // ✅ Trigger receiver
+    try {
+      await pusher.trigger(`user-${receiverId}`, 'new-message', pusherPayload);
+    } catch (pusherErr) {
+      console.error('Pusher trigger receiver error:', pusherErr.message);
+      // Don't fail the whole request if Pusher fails
+    }
 
+    // ✅ Trigger sender sidebar
+    try {
+      await pusher.trigger(`user-${req.user._id}`, 'message-sent', pusherPayload);
+    } catch (pusherErr) {
+      console.error('Pusher trigger sender error:', pusherErr.message);
+    }
+
+    // ✅ Always return full message to sender (includes image data)
     res.status(201).json({
       message: populatedMessage,
       conversationId: conversation._id
     });
 
   } catch (error) {
+    console.error('sendMessage error:', error);
     res.status(500).json({ message: error.message });
   }
 };

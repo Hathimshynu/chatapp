@@ -7,25 +7,27 @@ import ConversationItem from './ConversationItem';
 import Profile from '../pages/Profile';
 
 export default function Sidebar({ selectedConversation, onSelectConversation }) {
-  const [conversations, setConversations] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [activeTab, setActiveTab] = useState('chats');
-  const [fetchDone, setFetchDone] = useState(false);
-  const [unreadCounts, setUnreadCounts] = useState({});
-  const [showProfile, setShowProfile] = useState(false);
-  const { user, logout } = useAuth();
-  const { onlineUsers } = useSocket();
-  const { channel } = usePusher();
-  const hasFetched = useRef(false);
-  const selectedConvRef = useRef(selectedConversation);
+  const [conversations, setConversations]   = useState([]);
+  const [searchQuery, setSearchQuery]       = useState('');
+  const [searchResults, setSearchResults]   = useState([]);
+  const [activeTab, setActiveTab]           = useState('chats');
+  const [fetchDone, setFetchDone]           = useState(false);
+  const [unreadCounts, setUnreadCounts]     = useState({});
+  const [showProfile, setShowProfile]       = useState(false);
+  const { user, logout }   = useAuth();
+  const { onlineUsers }    = useSocket();
+  const { channel }        = usePusher();
+  const isFetchingRef      = useRef(false);
+  const selectedConvRef    = useRef(selectedConversation);
 
   useEffect(() => {
     selectedConvRef.current = selectedConversation;
   }, [selectedConversation]);
 
+  // ✅ fetchConversations — protected against duplicate calls
   const fetchConversations = useCallback(async () => {
-    if (!user?.token) return;
+    if (!user?.token || isFetchingRef.current) return;
+    isFetchingRef.current = true;
     try {
       const { data } = await axios.get('/api/messages/conversations', {
         headers: { Authorization: `Bearer ${user.token}` },
@@ -34,29 +36,50 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
       setConversations(data);
       setFetchDone(true);
     } catch (err) {
-      console.error(err);
+      console.error('fetchConversations error:', err);
       setFetchDone(true);
+    } finally {
+      isFetchingRef.current = false;
     }
   }, [user?.token]);
 
+  // ✅ Fetch on mount — no blocking ref
   useEffect(() => {
-    if (user?.token && !hasFetched.current) {
-      hasFetched.current = true;
+    if (user?.token) {
       fetchConversations();
     }
-  }, [user?.token, fetchConversations]);
+  }, [user?.token]);
 
-  // ✅ Pusher — real-time new message
+  // ✅ Pusher — real-time updates
   useEffect(() => {
     if (!channel) return;
 
-    channel.bind('new-message', ({ message, conversationId, sender }) => {
+    // New message received — payload is now metadata only (no image data)
+    channel.bind('new-message', (payload) => {
+      const {
+        messageId, conversationId, sender,
+        text, hasImage, messageType, createdAt, seen
+      } = payload;
+
+      const previewText = hasImage
+        ? (messageType === 'sticker' ? '🎭 Sticker' : '📷 Photo')
+        : text;
+
+      const previewMessage = {
+        _id: messageId,
+        sender,
+        text: previewText,
+        messageType,
+        createdAt,
+        seen,
+      };
+
       setConversations(prev => {
         const exists = prev.find(c => c._id === conversationId);
         if (exists) {
           const updated = prev.map(c =>
             c._id === conversationId
-              ? { ...c, lastMessage: message, updatedAt: new Date().toISOString() }
+              ? { ...c, lastMessage: previewMessage, updatedAt: new Date().toISOString() }
               : c
           );
           return [...updated].sort((a, b) =>
@@ -74,17 +97,29 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
           ...prev,
           [conversationId]: (prev[conversationId] || 0) + 1
         }));
-        showBrowserNotification(sender.name, message.text || '📷 Photo');
+        showBrowserNotification(sender?.name || 'New message', previewText);
       }
     });
 
-    channel.bind('message-sent', ({ message, conversationId }) => {
+    // Sender's own sidebar update
+    channel.bind('message-sent', (payload) => {
+      const { messageId, conversationId, sender, text, hasImage, messageType, createdAt, seen } = payload;
+
+      const previewText = hasImage
+        ? (messageType === 'sticker' ? '🎭 Sticker' : '📷 Photo')
+        : text;
+
+      const previewMessage = {
+        _id: messageId, sender,
+        text: previewText, messageType, createdAt, seen,
+      };
+
       setConversations(prev => {
         const exists = prev.find(c => c._id === conversationId);
         if (exists) {
           const updated = prev.map(c =>
             c._id === conversationId
-              ? { ...c, lastMessage: message, updatedAt: new Date().toISOString() }
+              ? { ...c, lastMessage: previewMessage, updatedAt: new Date().toISOString() }
               : c
           );
           return [...updated].sort((a, b) =>
@@ -103,6 +138,7 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
     };
   }, [channel, fetchConversations]);
 
+  // ✅ Browser notification
   const showBrowserNotification = (title, body) => {
     if (Notification.permission === 'granted') {
       new Notification(`💬 ${title}`, {
@@ -119,6 +155,7 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
     }
   }, []);
 
+  // ✅ Clear unread when conversation selected
   const handleSelectConversation = (conv) => {
     setUnreadCounts(prev => ({ ...prev, [conv._id]: 0 }));
     onSelectConversation(conv);
@@ -148,36 +185,28 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
     const existing = conversations.find(c =>
       !c.isGroup && c.participants?.some(p => p._id === otherUser._id)
     );
-
-    if (existing) {
-      handleSelectConversation(existing);
-      return;
-    }
+    if (existing) { handleSelectConversation(existing); return; }
 
     const tempConversation = {
       _id: 'temp_' + otherUser._id,
       isGroup: false,
       participants: [
-        {
-          _id: user._id, name: user.name,
-          email: user.email, avatar: user.avatar || '',
-          status: user.status || ''
-        },
-        {
-          _id: otherUser._id, name: otherUser.name,
-          email: otherUser.email, avatar: otherUser.avatar || '',
-          status: otherUser.status || ''
-        }
+        { _id: user._id, name: user.name, email: user.email, avatar: user.avatar || '', status: user.status || '' },
+        { _id: otherUser._id, name: otherUser.name, email: otherUser.email, avatar: otherUser.avatar || '', status: otherUser.status || '' }
       ],
       lastMessage: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-
     onSelectConversation(tempConversation);
   };
 
   const getOtherUser = (conv) => conv.participants?.find(p => p._id !== user._id);
+
+  // ✅ Online users — filter from conversations
+  const onlineConversations = conversations.filter(c =>
+    onlineUsers.includes(getOtherUser(c)?._id)
+  );
 
   return (
     <div style={{
@@ -186,45 +215,32 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
       display: 'flex', flexDirection: 'column', height: '100vh'
     }}>
 
-      {/* ── Header ────────────────────────────────────────────────── */}
+      {/* ── Header ── */}
       <div style={{
         background: 'linear-gradient(135deg, #128C7E, #075E54)',
         padding: '12px 16px', display: 'flex',
         alignItems: 'center', justifyContent: 'space-between', flexShrink: 0
       }}>
-        {/* ✅ Clickable avatar + name → opens profile */}
-        <div
-          onClick={() => setShowProfile(true)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '10px',
-            cursor: 'pointer', flex: 1
-          }}
-        >
-          {/* Avatar */}
+        <div onClick={() => setShowProfile(true)} style={{
+          display: 'flex', alignItems: 'center', gap: '10px',
+          cursor: 'pointer', flex: 1
+        }}>
           <div style={{
             width: '46px', height: '46px', borderRadius: '50%',
             overflow: 'hidden', flexShrink: 0,
             border: '2px solid rgba(255,255,255,0.6)',
             background: 'rgba(255,255,255,0.2)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            transition: 'opacity 0.2s'
-          }}
-            onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
-            onMouseLeave={e => e.currentTarget.style.opacity = '1'}
-          >
+          }}>
             {user?.avatar ? (
-              <img
-                src={user.avatar} alt="avatar"
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              />
+              <img src={user.avatar} alt="avatar"
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             ) : (
               <span style={{ fontSize: '20px', color: 'white', fontWeight: 800 }}>
                 {user?.name?.[0]?.toUpperCase()}
               </span>
             )}
           </div>
-
-          {/* Name + status */}
           <div>
             <div style={{
               color: 'white', fontWeight: 700, fontSize: '15px',
@@ -235,9 +251,7 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
                 fontSize: '10px', background: 'rgba(255,255,255,0.2)',
                 padding: '2px 7px', borderRadius: '10px',
                 color: 'rgba(255,255,255,0.85)', fontWeight: 500
-              }}>
-                ✏️ Edit
-              </span>
+              }}>✏️ Edit</span>
             </div>
             <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: '12px', marginTop: '1px' }}>
               🟢 Online
@@ -245,25 +259,28 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
           </div>
         </div>
 
-        {/*logout */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+          {totalUnread > 0 && (
+            <div style={{
+              background: '#25D366', color: 'white',
+              borderRadius: '50%', width: '24px', height: '24px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: '12px', fontWeight: 700
+            }}>
+              {totalUnread > 99 ? '99+' : totalUnread}
+            </div>
+          )}
           <button onClick={logout} style={{
             background: 'rgba(255,255,255,0.2)',
             border: '1px solid rgba(255,255,255,0.3)',
             color: 'white', padding: '6px 14px',
             borderRadius: '20px', cursor: 'pointer',
-            fontSize: '13px', fontWeight: 600,
-            transition: 'background 0.2s'
-          }}
-            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.35)'}
-            onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
-          >
-            Logout
-          </button>
+            fontSize: '13px', fontWeight: 600
+          }}>Logout</button>
         </div>
       </div>
 
-      {/* ── Tabs ──────────────────────────────────────────────────── */}
+      {/* ── Tabs ── */}
       <div style={{ display: 'flex', borderBottom: '1px solid #f0f2f5', flexShrink: 0 }}>
         {['chats', 'online'].map(tab => (
           <button key={tab} onClick={() => setActiveTab(tab)} style={{
@@ -283,19 +300,18 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
                     marginLeft: '6px', background: '#25D366',
                     color: 'white', borderRadius: '10px',
                     padding: '1px 7px', fontSize: '11px', fontWeight: 700
-                  }}>
-                    {totalUnread}
-                  </span>
+                  }}>{totalUnread}</span>
                 )}
               </span>
             ) : (
-              `🟢 Online (${onlineUsers.filter(id => id !== user._id).length})`
+              // ✅ Show count from onlineUsers state
+              `🟢 Online (${onlineUsers.filter(id => id !== user?._id).length})`
             )}
           </button>
         ))}
       </div>
 
-      {/* ── Search ────────────────────────────────────────────────── */}
+      {/* ── Search ── */}
       <div style={{ padding: '10px 14px', background: '#f0f2f5', flexShrink: 0 }}>
         <div style={{ position: 'relative' }}>
           <span style={{
@@ -316,22 +332,21 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
             }}
           />
           {searchQuery && (
-            <button
-              onClick={() => { setSearchQuery(''); setSearchResults([]); }}
-              style={{
-                position: 'absolute', right: '10px', top: '50%',
-                transform: 'translateY(-50%)', background: '#bbb',
-                border: 'none', borderRadius: '50%', width: '20px', height: '20px',
-                cursor: 'pointer', fontSize: '11px', color: 'white',
-                display: 'flex', alignItems: 'center', justifyContent: 'center'
-              }}
-            >✕</button>
+            <button onClick={() => { setSearchQuery(''); setSearchResults([]); }} style={{
+              position: 'absolute', right: '10px', top: '50%',
+              transform: 'translateY(-50%)', background: '#bbb',
+              border: 'none', borderRadius: '50%', width: '20px', height: '20px',
+              cursor: 'pointer', fontSize: '11px', color: 'white',
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>✕</button>
           )}
         </div>
       </div>
 
-      {/* ── List ──────────────────────────────────────────────────── */}
+      {/* ── List ── */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
+
+        {/* Search results */}
         {searchQuery ? (
           searchResults.length > 0 ? (
             <>
@@ -353,7 +368,6 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
                   onMouseEnter={e => e.currentTarget.style.background = '#f0faf9'}
                   onMouseLeave={e => e.currentTarget.style.background = 'white'}
                 >
-                  {/* Search result avatar */}
                   <div style={{ position: 'relative', flexShrink: 0 }}>
                     <div style={{
                       width: '50px', height: '50px', borderRadius: '50%',
@@ -362,13 +376,10 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       color: 'white', fontWeight: 700, fontSize: '20px'
                     }}>
-                      {u.avatar ? (
-                        <img src={u.avatar} alt={u.name}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                        />
-                      ) : (
-                        u.name?.[0]?.toUpperCase()
-                      )}
+                      {u.avatar
+                        ? <img src={u.avatar} alt={u.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : u.name?.[0]?.toUpperCase()
+                      }
                     </div>
                     {onlineUsers.includes(u._id) && (
                       <div style={{
@@ -382,9 +393,7 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
                     <div style={{
                       fontWeight: 700, color: '#111', fontSize: '15px',
                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
-                    }}>
-                      {u.name}
-                    </div>
+                    }}>{u.name}</div>
                     <div style={{
                       fontSize: '13px', marginTop: '2px',
                       color: onlineUsers.includes(u._id) ? '#25D366' : '#aaa',
@@ -397,9 +406,7 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
                     background: '#128C7E', color: 'white',
                     padding: '6px 14px', borderRadius: '16px',
                     fontSize: '12px', fontWeight: 700, flexShrink: 0
-                  }}>
-                    Chat →
-                  </div>
+                  }}>Chat →</div>
                 </div>
               ))}
             </>
@@ -409,27 +416,29 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
               <p style={{ fontWeight: 600, color: '#555', margin: '0 0 6px' }}>No users found</p>
             </div>
           )
+
+        /* Online tab */
         ) : activeTab === 'online' ? (
-          conversations.filter(c => onlineUsers.includes(getOtherUser(c)?._id)).length === 0 ? (
+          onlineConversations.length === 0 ? (
             <div style={{ textAlign: 'center', color: '#999', marginTop: '70px', padding: '20px' }}>
               <div style={{ fontSize: '44px', marginBottom: '12px' }}>🟢</div>
               <p style={{ fontWeight: 600, color: '#555' }}>No users online</p>
             </div>
           ) : (
-            conversations
-              .filter(c => onlineUsers.includes(getOtherUser(c)?._id))
-              .map(conv => (
-                <ConversationItem
-                  key={conv._id}
-                  conversation={conv}
-                  currentUser={user}
-                  isSelected={selectedConversation?._id === conv._id}
-                  isOnline={true}
-                  unreadCount={unreadCounts[conv._id] || 0}
-                  onClick={() => handleSelectConversation(conv)}
-                />
-              ))
+            onlineConversations.map(conv => (
+              <ConversationItem
+                key={conv._id}
+                conversation={conv}
+                currentUser={user}
+                isSelected={selectedConversation?._id === conv._id}
+                isOnline={true}
+                unreadCount={unreadCounts[conv._id] || 0}
+                onClick={() => handleSelectConversation(conv)}
+              />
+            ))
           )
+
+        /* Chats tab — loading */
         ) : !fetchDone ? (
           <div style={{
             display: 'flex', flexDirection: 'column',
@@ -444,12 +453,16 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
             <p style={{ color: '#999', margin: 0, fontSize: '14px' }}>Loading chats...</p>
             <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           </div>
+
+        /* Chats tab — empty */
         ) : conversations.length === 0 ? (
           <div style={{ textAlign: 'center', color: '#999', marginTop: '70px', padding: '20px' }}>
             <div style={{ fontSize: '50px', marginBottom: '12px' }}>💬</div>
             <p style={{ fontWeight: 600, color: '#555', margin: '0 0 6px' }}>No conversations yet</p>
             <p style={{ fontSize: '13px', margin: 0 }}>Search someone to start chatting</p>
           </div>
+
+        /* Chats tab — list */
         ) : (
           conversations.map(conv => (
             <ConversationItem
@@ -465,8 +478,13 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
         )}
       </div>
 
-      {/* ── Profile Modal ─────────────────────────────────────────── */}
-      {showProfile && <Profile onClose={() => setShowProfile(false)} />}
+      {/* ── Profile Modal ── */}
+      {showProfile && (
+        <Profile onClose={() => {
+          setShowProfile(false);
+          fetchConversations(); // ✅ refresh after profile update
+        }} />
+      )}
     </div>
   );
 }
