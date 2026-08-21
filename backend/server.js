@@ -23,6 +23,10 @@ app.use(cors({ origin: frontendUrl }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
+app.get('/', (req, res) => {
+  res.json({ service: 'ChatApp backend', status: 'ok' });
+});
+
 app.use('/api/auth',    require('./routes/auth'));
 app.use('/api/users',   require('./routes/users'));
 app.use('/api/messages', require('./routes/messages'));
