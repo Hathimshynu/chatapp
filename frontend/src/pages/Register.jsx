@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 
 export default function Register() {
   const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
   const navigate = useNavigate();
@@ -102,25 +103,45 @@ export default function Register() {
               }}>
                 {field}
               </label>
-              <input
-                type={field === 'password' ? 'password' : field === 'email' ? 'email' : 'text'}
-                value={form[field]}
-                onChange={(e) => setForm({ ...form, [field]: e.target.value })}
-                required
-                placeholder={
-                  field === 'name' ? 'John Doe' :
-                  field === 'email' ? 'you@example.com' : '••••••••'
-                }
-                style={inputStyle}
-                onFocus={e => {
-                  e.target.style.borderColor = '#43a047';
-                  e.target.style.background = '#e8f5e9';
-                }}
-                onBlur={e => {
-                  e.target.style.borderColor = '#c8e6c9';
-                  e.target.style.background = '#f1f8f1';
-                }}
-              />
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={field === 'password' ? (showPassword ? 'text' : 'password') : field === 'email' ? 'email' : 'text'}
+                  value={form[field]}
+                  onChange={(e) => setForm({ ...form, [field]: e.target.value })}
+                  required
+                  placeholder={
+                    field === 'name' ? 'John Doe' :
+                    field === 'email' ? 'you@example.com' : '••••••••'
+                  }
+                  style={{ ...inputStyle, ...(field === 'password' ? { paddingRight: '50px' } : {}) }}
+                  onFocus={e => {
+                    e.target.style.borderColor = '#43a047';
+                    e.target.style.background = '#e8f5e9';
+                  }}
+                  onBlur={e => {
+                    e.target.style.borderColor = '#c8e6c9';
+                    e.target.style.background = '#f1f8f1';
+                  }}
+                />
+                {field === 'password' && (
+                  <button
+                    type="button"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                    onClick={() => setShowPassword(!showPassword)}
+                    style={{
+                      position: 'absolute', right: '12px', top: '50%',
+                      transform: 'translateY(-50%)', border: 'none',
+                      background: 'transparent', color: '#528c4a',
+                      cursor: 'pointer', padding: '6px', display: 'flex'
+                    }}
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      {showPassword ? <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></> : <><path d="M3 3l18 18" /><path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c6.5 0 10 7 10 7a18.3 18.3 0 0 1-3 3.9M6.6 6.6C3.6 8.5 2 12 2 12s3.5 7 10 7a10.8 10.8 0 0 0 4.2-.8" /></>}
+                    </svg>
+                  </button>
+                )}
+              </div>
             </div>
           ))}
 
