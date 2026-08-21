@@ -26,6 +26,7 @@ export default function ChatBox({ conversation, onBack }) {
   const { user } = useAuth();
   const { socket, onlineUsers } = useSocket();
   const { channel } = usePusher();
+  const { startCall } = useCall();
 
   const handleCall = (type) => {
     startCall(otherUser, type);
@@ -59,9 +60,10 @@ export default function ChatBox({ conversation, onBack }) {
     "💯",
   ];
 
-  const otherUser = conversation?.participants?.find(
-    (p) => p._id !== user._id && p._id !== undefined,
-  );
+  const currentUserId = user?._id || user?.id;
+  const otherUser = conversation?.participants
+    ?.map(participant => ({ ...participant, _id: participant._id || participant.id }))
+    ?.find((participant) => String(participant._id) !== String(currentUserId));
   const isOnline = onlineUsers.includes(otherUser?._id);
 
   useEffect(() => {
@@ -284,16 +286,6 @@ const sendSticker = async (sticker) => {
     setText((prev) => prev + emoji);
     inputRef.current?.focus();
   };
-
-  const startCall = (type) => {
-    setCallState(type);
-    socket?.emit("callUser", {
-      receiverId: otherUser._id,
-      callType: type,
-      callerName: user.name,
-    });
-  };
-
 
   // ── Empty / Welcome state ──────────────────────────────────────────
   if (!conversation) {
@@ -650,12 +642,12 @@ const sendSticker = async (sticker) => {
           <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
             {[
               {
-                icon: "📞",
-                title: "Voice call",
+                icon: "phone",
+                title: "Audio call",
                 action: () => handleCall("audio"),
               },
               {
-                icon: "📹",
+                icon: "video",
                 title: "Video call",
                 action: () => handleCall("video"),
               },
@@ -665,27 +657,26 @@ const sendSticker = async (sticker) => {
                 onClick={action}
                 title={title}
                 style={{
-                  background: "rgba(255,255,255,0.15)",
+                  background: icon === "video" ? "#dbe7ff" : "#dff2d2",
                   border: "none",
-                  color: "white",
+                  color: icon === "video" ? "#315ba6" : "#39752e",
                   width: "40px",
                   height: "40px",
                   borderRadius: "50%",
                   cursor: "pointer",
-                  fontSize: "18px",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   transition: "background 0.2s",
                 }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = "rgba(255,255,255,0.3)")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = "rgba(255,255,255,0.15)")
-                }
+                onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-2px)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; }}
               >
-                {icon}
+                {icon === "video" ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m16 13 5 3V8l-5 3"/><rect x="3" y="6" width="13" height="12" rx="2"/></svg>
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.62 2.63a2 2 0 0 1-.45 2.11L8 9.73a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.85.29 1.73.5 2.63.62A2 2 0 0 1 22 16.92z"/></svg>
+                )}
               </button>
             ))}
           </div>

@@ -62,7 +62,7 @@ io.on('connection', (socket) => {
         callerId,
         callerName,
         callerAvatar,
-        callType,
+        callType: callType === 'video' ? 'video' : 'audio',
         channelName,
         socketId: socket.id
       });

@@ -72,7 +72,9 @@ export default function useWebRTC({ user }) {
     clientRef.current = client;
     client.on('user-published', async (remoteUser, mediaType) => {
       await client.subscribe(remoteUser, mediaType);
-      if (mediaType === 'audio') remoteUser.audioTrack?.play();
+      if (mediaType === 'audio' && remoteUser.audioTrack) {
+        remoteUser.audioTrack.play();
+      }
       if (mediaType === 'video') setRemoteStream(remoteUser.videoTrack);
     });
     client.on('user-unpublished', (remoteUser, mediaType) => {

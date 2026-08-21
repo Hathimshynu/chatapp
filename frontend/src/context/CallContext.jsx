@@ -22,9 +22,12 @@ export const CallProvider = ({ children }) => {
     startRingtone, stopRingtone,
   } = useWebRTC({ socket, user });
 
-  const getChannelName = useCallback((firstId, secondId) => (
-    `chatapp-${[String(firstId), String(secondId)].sort().join('-')}`
-  ), []);
+  const getChannelName = useCallback((firstId, secondId) => {
+    if (!firstId || !secondId || firstId === 'undefined' || secondId === 'undefined') {
+      throw new Error('Unable to start call: user information is incomplete.');
+    }
+    return `chatapp-${[String(firstId), String(secondId)].sort().join('-')}`;
+  }, []);
 
   // ── Socket listeners ─────────────────────────────────────────────
   useEffect(() => {
@@ -32,9 +35,10 @@ export const CallProvider = ({ children }) => {
 
     // Someone is calling us
     socket.on('incomingCall', ({ callerId, callerName, callerAvatar, callType, socketId, channelName }) => {
-      setIncomingData({ callerId, callerName, callerAvatar, callType, socketId, channelName });
+      const normalizedCallType = callType === 'video' ? 'video' : 'audio';
+      setIncomingData({ callerId, callerName, callerAvatar, callType: normalizedCallType, socketId, channelName });
       setOtherUser({ _id: callerId, name: callerName, avatar: callerAvatar });
-      setCallType(callType);
+      setCallType(normalizedCallType);
 
       if (callState === 'active') {
         // Already on a call — auto reject
@@ -88,20 +92,26 @@ export const CallProvider = ({ children }) => {
 
   // ── Start outgoing call ──────────────────────────────────────────
   const startCall = useCallback(async (targetUser, type = 'audio') => {
-    if (!socket || !targetUser?._id) return;
-    setOtherUser(targetUser);
+    type = type === 'video' ? 'video' : 'audio';
+    const callerId = user?._id || user?.id;
+    const receiverId = targetUser?._id || targetUser?.id;
+    if (!socket || !callerId || !receiverId) {
+      throw new Error('Unable to start call: user information is incomplete.');
+    }
+    const callTarget = { ...targetUser, _id: receiverId };
+    setOtherUser(callTarget);
     setCallType(type);
     setCallState('outgoing');
     setIsMuted(false);
 
     try {
-      const channelName = getChannelName(user._id, targetUser._id);
+      const channelName = getChannelName(callerId, receiverId);
       await joinCall(channelName, type);
       startRingtone();
       socket.emit('callUser', {
-        receiverId:  targetUser._id,
+        receiverId,
         callType:    type,
-        callerId:    user._id,
+        callerId,
         callerName:  user.name,
         callerAvatar: user.avatar || '',
         channelName
@@ -122,7 +132,8 @@ export const CallProvider = ({ children }) => {
     stopRingtone();
 
     try {
-      const channelName = incomingData.channelName || getChannelName(incomingData.callerId, user._id);
+      const receiverId = user?._id || user?.id;
+      const channelName = incomingData.channelName || getChannelName(incomingData.callerId, receiverId);
       await joinCall(channelName, incomingData.callType);
       socket.emit('acceptCall', { callerId: incomingData.callerId });
     } catch (err) {
@@ -172,6 +183,7 @@ export const CallProvider = ({ children }) => {
       {showBanner && incomingData && !callState && (
         <IncomingCallBanner
           caller={{ name: incomingData.callerName, avatar: incomingData.callerAvatar }}
+          callType={incomingData.callType}
           onAccept={acceptCall}
           onReject={rejectCall}
         />
