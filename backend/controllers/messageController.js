@@ -30,11 +30,7 @@ const getMessages = async (req, res) => {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    const messages = await Message.find({
-      conversationId: req.params.conversationId
-    }).populate('sender', 'name avatar');
-
-    // Mark as seen
+    // Mark incoming messages as read before returning the conversation.
     const unseenMessages = await Message.find({
       conversationId: req.params.conversationId,
       sender: { $ne: req.user._id },
@@ -42,21 +38,37 @@ const getMessages = async (req, res) => {
     });
 
     if (unseenMessages.length > 0) {
+      const messageIds = unseenMessages.map(message => message._id);
       await Message.updateMany(
         {
           conversationId: req.params.conversationId,
           sender: { $ne: req.user._id },
           seen: { $ne: req.user._id }
         },
-        { $push: { seen: req.user._id } }
+        { $addToSet: { seen: req.user._id } }
       );
 
-      const senderId = unseenMessages[0].sender.toString();
-      pusher.trigger(`user-${senderId}`, 'messages-seen', {
+      const senderIds = [...new Set(unseenMessages.map(message => message.sender.toString()))];
+      await Promise.all(senderIds.map(senderId =>
+        pusher.trigger(`user-${senderId}`, 'messages-seen', {
+          conversationId: req.params.conversationId,
+          messageIds: messageIds.map(id => id.toString()),
+          seenBy: req.user._id.toString()
+        })
+      )).catch(error => {
+        console.error('messages-seen Pusher trigger error:', error.message);
+      });
+
+      req.app.get('io').to(`user-${unseenMessages[0].sender.toString()}`).emit('messages-seen', {
         conversationId: req.params.conversationId,
-        seenBy: req.user._id
+        messageIds: messageIds.map(id => id.toString()),
+        seenBy: req.user._id.toString()
       });
     }
+
+    const messages = await Message.find({
+      conversationId: req.params.conversationId
+    }).populate('sender', 'name avatar');
 
     res.json(messages);
   } catch (error) {

@@ -16,6 +16,7 @@ const io = new Server(server, {
     methods: ['GET', 'POST']
   }
 });
+app.set('io', io);
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -24,6 +25,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use('/api/auth',    require('./routes/auth'));
 app.use('/api/users',   require('./routes/users'));
 app.use('/api/messages', require('./routes/messages'));
+app.use('/api/calls', require('./routes/calls'));
 
 // ── Socket.io ─────────────────────────────────────────────────────
 const onlineUsers = new Map(); // userId → socketId
@@ -33,7 +35,9 @@ io.on('connection', (socket) => {
 
   // ── Online presence ──────────────────────────────────────────────
   socket.on('userOnline', (userId) => {
-    onlineUsers.set(userId, socket.id);
+    const normalizedUserId = String(userId);
+    socket.join(`user-${normalizedUserId}`);
+    onlineUsers.set(normalizedUserId, socket.id);
     io.emit('onlineUsers', Array.from(onlineUsers.keys()));
   });
 
@@ -51,7 +55,7 @@ io.on('connection', (socket) => {
   // ── WebRTC Signaling ─────────────────────────────────────────────
 
   // 1. Caller initiates call
-  socket.on('callUser', ({ receiverId, callType, callerName, callerId, callerAvatar }) => {
+  socket.on('callUser', ({ receiverId, callType, callerName, callerId, callerAvatar, channelName }) => {
     const receiverSocket = onlineUsers.get(receiverId);
     if (receiverSocket) {
       io.to(receiverSocket).emit('incomingCall', {
@@ -59,6 +63,7 @@ io.on('connection', (socket) => {
         callerName,
         callerAvatar,
         callType,
+        channelName,
         socketId: socket.id
       });
     } else {
