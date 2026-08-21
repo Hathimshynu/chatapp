@@ -34,6 +34,7 @@ Create `frontend/.env`:
 VITE_PUSHER_KEY=your-pusher-key
 VITE_PUSHER_CLUSTER=your-pusher-cluster
 VITE_GIPHY_KEY=your-giphy-api-key
+VITE_API_URL=http://localhost:5000
 ```
 
 Only variables prefixed with `VITE_` are exposed to the browser. Do not put private Pusher secrets, JWT secrets, MongoDB credentials, or Agora certificates in this file.
@@ -70,3 +71,4 @@ npm run preview
 - API `404` or connection errors: confirm the backend is running on port `5000`.
 - Agora token errors: confirm the backend `.env` contains `AGORA_APP_ID` and `APP_CERTIFICATE`, then restart the backend.
 - Microphone or camera errors: allow browser permissions for `localhost` and use HTTPS in production.
+- In production, set `VITE_API_URL` to the Render backend URL, including `https://` and no trailing slash.

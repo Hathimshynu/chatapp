@@ -44,6 +44,7 @@ PUSHER_CLUSTER=your-pusher-cluster
 
 AGORA_APP_ID=your-agora-app-id
 APP_CERTIFICATE=your-agora-app-certificate
+FRONTEND_URL=http://localhost:5173
 ```
 
 | Variable | Required | Purpose |
@@ -58,6 +59,7 @@ APP_CERTIFICATE=your-agora-app-certificate
 | `PUSHER_CLUSTER` | Yes | Pusher cluster, for example `ap2`. |
 | `AGORA_APP_ID` | Yes | Agora project App ID. |
 | `APP_CERTIFICATE` | Yes | Private Agora certificate used to sign RTC tokens. |
+| `FRONTEND_URL` | Yes | Allowed frontend origin for CORS and Socket.IO. |
 
 Never commit `.env`, database credentials, Pusher secrets, Agora certificates, or JWT secrets.
 
