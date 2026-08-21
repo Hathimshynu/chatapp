@@ -17,14 +17,15 @@ export default function CallModal({
   onToggleMute,
 }) {
   const remoteAudioRef = useRef(null);
+  const remoteVideoRef = useRef(null);
   const [ripple, setRipple] = useState(0);
 
   // ✅ Attach remote stream to audio element
   useEffect(() => {
-    if (remoteAudioRef.current && remoteStream) {
-      remoteAudioRef.current.srcObject = remoteStream;
+    if (remoteStream && callType === 'video' && remoteVideoRef.current) {
+      remoteStream.play(remoteVideoRef.current);
     }
-  }, [remoteStream]);
+  }, [remoteStream, callType]);
 
   // ✅ Ripple animation for ringing
   useEffect(() => {
@@ -57,6 +58,12 @@ export default function CallModal({
 
       {/* Hidden audio for remote stream */}
       <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
+      {callType === 'video' && remoteStream && (
+        <video ref={remoteVideoRef} autoPlay playsInline style={{
+          position: 'absolute', inset: 0, width: '100%', height: '100%',
+          objectFit: 'cover', zIndex: -1, opacity: 0.72
+        }} />
+      )}
 
       {/* Top — name + status */}
       <div style={{ textAlign: 'center', marginBottom: '48px' }}>
@@ -64,7 +71,7 @@ export default function CallModal({
           color: 'rgba(255,255,255,0.6)', fontSize: '14px',
           margin: '0 0 8px', letterSpacing: '1px', textTransform: 'uppercase'
         }}>
-          {callType === 'audio' ? '📞 Audio Call' : '📹 Video Call'}
+          {callType === 'audio' ? 'Audio Call' : 'Video Call'}
         </p>
         <h2 style={{
           color: 'white', fontSize: '28px', fontWeight: 800,

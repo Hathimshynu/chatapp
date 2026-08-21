@@ -1,24 +1,14 @@
 import { useRef, useState, useCallback } from 'react';
+import AgoraRTC from 'agora-rtc-sdk-ng';
+import axios from 'axios';
 
-const ICE_SERVERS = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    // ✅ Free TURN from Metered (sign up at metered.ca for free 50GB/month)
-    // { urls: 'turn:relay.metered.ca:80', username: 'YOUR_USERNAME', credential: 'YOUR_CRED' },
-  ]
-};
-
-export default function useWebRTC({ socket, user }) {
-  const [localStream, setLocalStream]   = useState(null);
+export default function useWebRTC({ user }) {
   const [remoteStream, setRemoteStream] = useState(null);
   const [callDuration, setCallDuration] = useState(0);
-
-  const peerRef        = useRef(null);
-  const localStreamRef = useRef(null);
-  const timerRef       = useRef(null);
-  const ringtoneRef    = useRef(null);
+  const clientRef = useRef(null);
+  const localTracksRef = useRef([]);
+  const timerRef = useRef(null);
+  const ringtoneRef = useRef(null);
 
   // ── Start ringtone ───────────────────────────────────────────────
   const startRingtone = useCallback(() => {
@@ -53,12 +43,10 @@ export default function useWebRTC({ socket, user }) {
     }
   }, []);
 
-  // ── Start call duration timer ────────────────────────────────────
   const startTimer = useCallback(() => {
+    if (timerRef.current) return;
     setCallDuration(0);
-    timerRef.current = setInterval(() => {
-      setCallDuration(prev => prev + 1);
-    }, 1000);
+    timerRef.current = setInterval(() => setCallDuration(value => value + 1), 1000);
   }, []);
 
   const stopTimer = useCallback(() => {
@@ -69,147 +57,63 @@ export default function useWebRTC({ socket, user }) {
     setCallDuration(0);
   }, []);
 
-  // ── Format duration ──────────────────────────────────────────────
   const formatDuration = useCallback((secs) => {
     const m = Math.floor(secs / 60).toString().padStart(2, '0');
     const s = (secs % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
   }, []);
 
-  // ── Get microphone ───────────────────────────────────────────────
-  const getLocalStream = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      localStreamRef.current = stream;
-      setLocalStream(stream);
-      return stream;
-    } catch (err) {
-      console.error('Mic access denied:', err);
-      throw new Error('Microphone access denied. Please allow microphone access.');
-    }
-  }, []);
-
-  // ── Create peer connection ───────────────────────────────────────
-  const createPeer = useCallback((stream) => {
-    const peer = new RTCPeerConnection(ICE_SERVERS);
-
-    // Add local tracks
-    stream.getTracks().forEach(track => peer.addTrack(track, stream));
-
-    // Remote stream
-    const remote = new MediaStream();
-    setRemoteStream(remote);
-
-    peer.ontrack = (e) => {
-      e.streams[0].getTracks().forEach(track => remote.addTrack(track));
-    };
-
-    // ICE candidates
-    peer.onicecandidate = (e) => {
-      if (e.candidate) {
-        socket.emit('sendIceCandidate', {
-          receiverId: peerRef._targetUserId,
-          candidate: e.candidate
-        });
-      }
-    };
-
-    peer.onconnectionstatechange = () => {
-      console.log('Connection state:', peer.connectionState);
-    };
-
-    peerRef.current = peer;
-    return peer;
-  }, [socket]);
-
-  // ── Initiate call (caller side) ──────────────────────────────────
-  const initiateCall = useCallback(async (targetUserId) => {
-    peerRef._targetUserId = targetUserId;
-    const stream = await getLocalStream();
-    const peer   = createPeer(stream);
-
-    const offer = await peer.createOffer();
-    await peer.setLocalDescription(offer);
-
-    socket.emit('sendOffer', { receiverId: targetUserId, offer });
-    startRingtone();
-    return stream;
-  }, [getLocalStream, createPeer, socket, startRingtone]);
-
-  // ── Answer call (receiver side) ──────────────────────────────────
-  const answerCall = useCallback(async (callerId, offer) => {
-    peerRef._targetUserId = callerId;
-    stopRingtone();
-    const stream = await getLocalStream();
-    const peer   = createPeer(stream);
-
-    await peer.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await peer.createAnswer();
-    await peer.setLocalDescription(answer);
-
-    socket.emit('sendAnswer', { callerId, answer });
+  const joinCall = useCallback(async (channelName, callType) => {
+    if (clientRef.current) return;
+    const { data } = await axios.get(`/api/calls/token?channel=${encodeURIComponent(channelName)}`, {
+      headers: { Authorization: `Bearer ${user.token}` }
+    });
+    const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
+    clientRef.current = client;
+    client.on('user-published', async (remoteUser, mediaType) => {
+      await client.subscribe(remoteUser, mediaType);
+      if (mediaType === 'audio') remoteUser.audioTrack?.play();
+      if (mediaType === 'video') setRemoteStream(remoteUser.videoTrack);
+    });
+    client.on('user-unpublished', (remoteUser, mediaType) => {
+      if (mediaType === 'video') setRemoteStream(null);
+    });
+    await client.join(data.appId, channelName, data.token, null);
+    const tracks = await AgoraRTC.createMicrophoneAndCameraTracks({}, { encoderConfig: '480p_1' });
+    localTracksRef.current = callType === 'video' ? tracks : [tracks[0]];
+    if (callType !== 'video') tracks[1].close();
+    await client.publish(localTracksRef.current);
     startTimer();
-    return stream;
-  }, [getLocalStream, createPeer, socket, stopRingtone, startTimer]);
-
-  // ── Handle incoming answer (caller side) ────────────────────────
-  const handleAnswer = useCallback(async (answer) => {
-    if (peerRef.current) {
-      await peerRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-      stopRingtone();
-      startTimer();
-    }
-  }, [stopRingtone, startTimer]);
-
-  // ── Handle ICE candidate ─────────────────────────────────────────
-  const handleIceCandidate = useCallback(async (candidate) => {
-    if (peerRef.current && candidate) {
-      try {
-        await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (e) {
-        console.error('ICE candidate error:', e);
-      }
-    }
-  }, []);
+  }, [startTimer, user?.token]);
 
   // ── Toggle mute ──────────────────────────────────────────────────
   const toggleMute = useCallback(() => {
-    if (localStreamRef.current) {
-      const track = localStreamRef.current.getAudioTracks()[0];
-      if (track) {
-        track.enabled = !track.enabled;
-        return !track.enabled; // returns isMuted
-      }
-    }
-    return false;
+    const microphone = localTracksRef.current.find(track => track.trackMediaType === 'audio');
+    if (!microphone) return false;
+    microphone.setEnabled(!microphone.enabled);
+    return !microphone.enabled;
   }, []);
 
   // ── End call / cleanup ───────────────────────────────────────────
-  const endCall = useCallback(() => {
+  const endCall = useCallback(async () => {
     stopRingtone();
     stopTimer();
 
-    if (peerRef.current) {
-      peerRef.current.close();
-      peerRef.current = null;
+    localTracksRef.current.forEach(track => track.close());
+    localTracksRef.current = [];
+    if (clientRef.current) {
+      await clientRef.current.leave();
+      clientRef.current.removeAllListeners();
+      clientRef.current = null;
     }
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(t => t.stop());
-      localStreamRef.current = null;
-    }
-    setLocalStream(null);
     setRemoteStream(null);
   }, [stopRingtone, stopTimer]);
 
   return {
-    localStream,
     remoteStream,
     callDuration,
     formatDuration,
-    initiateCall,
-    answerCall,
-    handleAnswer,
-    handleIceCandidate,
+    joinCall,
     toggleMute,
     endCall,
     startRingtone,

@@ -126,11 +126,11 @@ useEffect(() => {
   });
 
   // ✅ Double tick — messages seen
-  channel.bind('messages-seen', ({ conversationId }) => {
+  channel.bind('messages-seen', ({ conversationId, messageIds = [] }) => {
     if (conversation._id === conversationId) {
       setMessages(prev =>
         prev.map(msg =>
-          msg.sender?._id === user._id || msg.sender === user._id
+          (messageIds.includes(msg._id) || msg.sender?._id === user._id || msg.sender === user._id)
             ? { ...msg, seen: [user._id, 'receiver'] }
             : msg
         )
@@ -149,14 +149,23 @@ useEffect(() => {
     if (!socket) return;
     socket.on("userTyping", () => setIsTyping(true));
     socket.on("userStopTyping", () => setIsTyping(false));
+    socket.on("messages-seen", ({ conversationId, messageIds = [] }) => {
+      if (conversation?._id !== conversationId) return;
+      setMessages(prev => prev.map(msg =>
+        messageIds.includes(String(msg._id))
+          ? { ...msg, seen: [user._id, 'receiver'] }
+          : msg
+      ));
+    });
     return () => {
       socket.off("userTyping");
       socket.off("userStopTyping");
+      socket.off("messages-seen");
     };
-  }, [socket]);
+  }, [socket, conversation?._id, user?._id]);
 
-  const fetchMessages = async () => {
-    setLoading(true);
+  const fetchMessages = async (showLoader = true) => {
+    if (showLoader) setLoading(true);
     try {
       const { data } = await axios.get(`/api/messages/${conversation._id}`, {
         headers: { Authorization: `Bearer ${user.token}` },
@@ -165,9 +174,17 @@ useEffect(() => {
     } catch (err) {
       console.error(err);
     } finally {
-      setLoading(false);
+      if (showLoader) setLoading(false);
     }
   };
+
+  // Keep read receipts current if a realtime event is missed during reconnect.
+  useEffect(() => {
+    if (!conversation?._id || conversation._id.startsWith('temp') || !user?.token) return;
+
+    const statusSync = window.setInterval(() => fetchMessages(false), 1500);
+    return () => window.clearInterval(statusSync);
+  }, [conversation?._id, user?.token]);
 
   const handleTyping = (e) => {
     setText(e.target.value);
@@ -1300,7 +1317,8 @@ const sendSticker = async (sticker) => {
                   fontSize: "14px",
                 }}
               >
-                📞 Voice
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2A19.8 19.8 0 0 1 3.1 5.18 2 2 0 0 1 5.1 3h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.62 2.63a2 2 0 0 1-.45 2.11L9 10a16 16 0 0 0 5 5l.54-1.27a2 2 0 0 1 2.11-.45c.85.29 1.73.5 2.63.62A2 2 0 0 1 22 16.92Z" /></svg>
+                Voice
               </button>
 
               <button
@@ -1320,7 +1338,8 @@ const sendSticker = async (sticker) => {
                   fontSize: "14px",
                 }}
               >
-                📹 Video
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m22 8-6 4 6 4V8Z" /><rect x="2" y="5" width="14" height="14" rx="2" /></svg>
+                Video
               </button>
             </div>
           </div>

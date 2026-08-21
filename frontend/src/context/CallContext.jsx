@@ -16,22 +16,23 @@ export const CallProvider = ({ children }) => {
   const [isMuted, setIsMuted]             = useState(false);
   const [incomingData, setIncomingData]   = useState(null);
   const [showBanner, setShowBanner]       = useState(false);
-  const offerRef = useRef(null);
-
   const {
     remoteStream, callDuration, formatDuration,
-    initiateCall, answerCall, handleAnswer,
-    handleIceCandidate, toggleMute, endCall,
+    joinCall, toggleMute, endCall,
     startRingtone, stopRingtone,
   } = useWebRTC({ socket, user });
+
+  const getChannelName = useCallback((firstId, secondId) => (
+    `chatapp-${[String(firstId), String(secondId)].sort().join('-')}`
+  ), []);
 
   // ── Socket listeners ─────────────────────────────────────────────
   useEffect(() => {
     if (!socket) return;
 
     // Someone is calling us
-    socket.on('incomingCall', ({ callerId, callerName, callerAvatar, callType, socketId }) => {
-      setIncomingData({ callerId, callerName, callerAvatar, callType, socketId });
+    socket.on('incomingCall', ({ callerId, callerName, callerAvatar, callType, socketId, channelName }) => {
+      setIncomingData({ callerId, callerName, callerAvatar, callType, socketId, channelName });
       setOtherUser({ _id: callerId, name: callerName, avatar: callerAvatar });
       setCallType(callType);
 
@@ -45,20 +46,9 @@ export const CallProvider = ({ children }) => {
       startRingtone();
     });
 
-    // Caller sent WebRTC offer
-    socket.on('receiveOffer', async ({ offer, callerId }) => {
-      offerRef.current = { offer, callerId };
-    });
-
-    // Receiver answered — caller handles this
-    socket.on('receiveAnswer', async ({ answer }) => {
-      await handleAnswer(answer);
+    socket.on('callAccepted', () => {
+      stopRingtone();
       setCallState('active');
-    });
-
-    // ICE candidates
-    socket.on('receiveIceCandidate', async ({ candidate }) => {
-      await handleIceCandidate(candidate);
     });
 
     // Call was rejected
@@ -89,14 +79,12 @@ export const CallProvider = ({ children }) => {
 
     return () => {
       socket.off('incomingCall');
-      socket.off('receiveOffer');
-      socket.off('receiveAnswer');
-      socket.off('receiveIceCandidate');
+      socket.off('callAccepted');
       socket.off('callRejected');
       socket.off('callEnded');
       socket.off('callCancelled');
     };
-  }, [socket, callState, handleAnswer, handleIceCandidate, endCall, startRingtone, stopRingtone]);
+  }, [socket, callState, endCall, startRingtone, stopRingtone]);
 
   // ── Start outgoing call ──────────────────────────────────────────
   const startCall = useCallback(async (targetUser, type = 'audio') => {
@@ -107,13 +95,16 @@ export const CallProvider = ({ children }) => {
     setIsMuted(false);
 
     try {
-      await initiateCall(targetUser._id);
+      const channelName = getChannelName(user._id, targetUser._id);
+      await joinCall(channelName, type);
+      startRingtone();
       socket.emit('callUser', {
         receiverId:  targetUser._id,
         callType:    type,
         callerId:    user._id,
         callerName:  user.name,
-        callerAvatar: user.avatar || ''
+        callerAvatar: user.avatar || '',
+        channelName
       });
     } catch (err) {
       alert(err.message);
@@ -121,7 +112,7 @@ export const CallProvider = ({ children }) => {
       setOtherUser(null);
       endCall();
     }
-  }, [socket, user, initiateCall, endCall]);
+  }, [socket, user, joinCall, getChannelName, startRingtone, endCall]);
 
   // ── Accept call ──────────────────────────────────────────────────
   const acceptCall = useCallback(async () => {
@@ -131,29 +122,14 @@ export const CallProvider = ({ children }) => {
     stopRingtone();
 
     try {
-      // Wait for offer if not yet received
-      let attempts = 0;
-      while (!offerRef.current && attempts < 20) {
-        await new Promise(r => setTimeout(r, 200));
-        attempts++;
-      }
-
-      if (!offerRef.current) {
-        alert('Could not connect. Please try again.');
-        setCallState(null);
-        return;
-      }
-
-      const { offer, callerId } = offerRef.current;
-      await answerCall(callerId, offer);
-      offerRef.current = null;
-
+      const channelName = incomingData.channelName || getChannelName(incomingData.callerId, user._id);
+      await joinCall(channelName, incomingData.callType);
       socket.emit('acceptCall', { callerId: incomingData.callerId });
     } catch (err) {
       alert(err.message);
       setCallState(null);
     }
-  }, [incomingData, answerCall, socket, stopRingtone]);
+  }, [incomingData, user?._id, joinCall, getChannelName, socket, stopRingtone]);
 
   // ── Reject call ──────────────────────────────────────────────────
   const rejectCall = useCallback(() => {
@@ -163,7 +139,6 @@ export const CallProvider = ({ children }) => {
     setShowBanner(false);
     setIncomingData(null);
     setCallState(null);
-    offerRef.current = null;
   }, [incomingData, socket, stopRingtone]);
 
   // ── End active call ──────────────────────────────────────────────
@@ -181,7 +156,6 @@ export const CallProvider = ({ children }) => {
     setOtherUser(null);
     setIsMuted(false);
     setIncomingData(null);
-    offerRef.current = null;
   }, [otherUser, callState, socket, endCall, stopRingtone]);
 
   // ── Toggle mute ──────────────────────────────────────────────────
