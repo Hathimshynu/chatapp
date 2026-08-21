@@ -1,16 +1,72 @@
-# React + Vite
+# ChatApp Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React and Vite frontend for the ChatApp messaging application.
 
-Currently, two official plugins are available:
+## Functionality
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- User registration, login, logout, and profile editing
+- Conversation search and one-to-one chats
+- Real-time messages, typing indicators, online presence, and read receipts
+- Image messages, stickers, GIFs, replies, and message previews
+- Audio and video calls through Agora RTC
+- Incoming call notifications and call controls
 
-## React Compiler
+## Requirements
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Node.js 18 or later
+- npm
+- The ChatApp backend running on port `5000`
+- A GIPHY API key for stickers and GIFs
+- Matching Pusher Channels credentials used by the backend
 
-## Expanding the ESLint configuration
+## Setup
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+From the project root:
+
+```powershell
+cd frontend
+npm install
+```
+
+Create `frontend/.env`:
+
+```env
+VITE_PUSHER_KEY=your-pusher-key
+VITE_PUSHER_CLUSTER=your-pusher-cluster
+VITE_GIPHY_KEY=your-giphy-api-key
+```
+
+Only variables prefixed with `VITE_` are exposed to the browser. Do not put private Pusher secrets, JWT secrets, MongoDB credentials, or Agora certificates in this file.
+
+## Run In Development
+
+Start the backend first in another terminal, then start Vite:
+
+```powershell
+cd backend
+npm run dev
+```
+
+```powershell
+cd frontend
+npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173).
+
+The Vite proxy forwards `/api` requests to `http://127.0.0.1:5000`. Do not start two backend processes on port `5000`; a second process will fail with `EADDRINUSE`.
+
+## Build And Preview
+
+```powershell
+cd frontend
+npm run build
+npm run preview
+```
+
+## Troubleshooting
+
+- Blank page or module errors: stop duplicate Vite processes, clear `frontend/node_modules/.vite`, and run `npm run dev` again.
+- API `404` or connection errors: confirm the backend is running on port `5000`.
+- Agora token errors: confirm the backend `.env` contains `AGORA_APP_ID` and `APP_CERTIFICATE`, then restart the backend.
+- Microphone or camera errors: allow browser permissions for `localhost` and use HTTPS in production.

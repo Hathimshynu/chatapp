@@ -1,98 +1,107 @@
-# Chat Server
+# ChatApp Backend
 
-Backend API and real-time server for the chat application.
+Express, MongoDB, Socket.IO, Pusher, and Agora token service for ChatApp.
 
-## Features
+## Functionality
 
-- User registration and login with JWT authentication
-- MongoDB persistence with Mongoose
-- REST API for users, conversations, and messages
-- Real-time messaging and presence with Socket.IO
-- Pusher integration for chat events
-- WebRTC signaling for audio and video calls
+- JWT authentication for registration and login
+- MongoDB persistence for users, conversations, and messages
+- REST APIs for users, conversations, messages, and Agora call tokens
+- Real-time messaging, typing indicators, online presence, and read receipts
+- Pusher events for message delivery and sidebar updates
+- Socket.IO signaling for call invitations, acceptance, rejection, and hang-up
+- Agora RTC token generation for browser audio and video calls
 
 ## Requirements
 
-Install these before starting:
-
 - Node.js 18 or later
 - npm
-- MongoDB, either locally or through MongoDB Atlas
+- MongoDB running locally or a MongoDB Atlas connection
 - A Pusher Channels application
-- Git
+- An Agora project with an App ID and App Certificate
 
 ## Setup
 
-Run the following commands one line at a time:
+From the project root:
 
-```bash
-git clone <your-github-repository-url>
-cd chatapp/backend
+```powershell
+cd backend
 npm install
 ```
 
-Create a file named `.env` in the `backend` directory and add:
+Create `backend/.env`:
 
 ```env
+PORT=5000
+NODE_ENV=development
 MONGO_URI=mongodb://127.0.0.1:27017/chatapp
 JWT_SECRET=replace-with-a-long-random-secret
+
 PUSHER_APP_ID=your-pusher-app-id
 PUSHER_KEY=your-pusher-key
 PUSHER_SECRET=your-pusher-secret
 PUSHER_CLUSTER=your-pusher-cluster
-PORT=5000
+
+AGORA_APP_ID=your-agora-app-id
+APP_CERTIFICATE=your-agora-app-certificate
 ```
 
-Replace each placeholder with your own MongoDB and Pusher values. Keep `.env` private and do not commit it to GitHub.
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `PORT` | No | API and Socket.IO port. Defaults to `5000`. |
+| `NODE_ENV` | No | Runtime environment. |
+| `MONGO_URI` | Yes | MongoDB connection string. |
+| `JWT_SECRET` | Yes | Secret used to sign login tokens. |
+| `PUSHER_APP_ID` | Yes | Pusher application ID. |
+| `PUSHER_KEY` | Yes | Pusher server key; match the frontend key. |
+| `PUSHER_SECRET` | Yes | Private Pusher server secret. |
+| `PUSHER_CLUSTER` | Yes | Pusher cluster, for example `ap2`. |
+| `AGORA_APP_ID` | Yes | Agora project App ID. |
+| `APP_CERTIFICATE` | Yes | Private Agora certificate used to sign RTC tokens. |
 
-Start the server in development mode:
+Never commit `.env`, database credentials, Pusher secrets, Agora certificates, or JWT secrets.
 
-```bash
+## Run In Development
+
+Start MongoDB first, then run:
+
+```powershell
+cd backend
 npm run dev
 ```
 
-Start the server normally:
+The API and Socket.IO server run at [http://localhost:5000](http://localhost:5000).
 
-```bash
-npm start
-```
-
-The API runs at `http://localhost:5000` by default.
+For a normal Node process use `npm start`. Run only one backend process on port `5000`; otherwise Node reports `EADDRINUSE`.
 
 ## API Routes
 
-- `POST /api/auth/register` - Register a user
+- `POST /api/auth/register` - Create an account
 - `POST /api/auth/login` - Log in and receive a JWT
-- `/api/users` - User endpoints
-- `/api/messages` - Message endpoints
+- `GET /api/users/search` - Search users
+- `GET /api/messages/conversations` - List conversations
+- `GET /api/messages/:conversationId` - Load messages and mark incoming messages read
+- `POST /api/messages/send` - Send text, image, or sticker messages
+- `GET /api/messages/single/:messageId` - Load one complete message
+- `DELETE /api/messages/:messageId` - Delete a message sent by the current user
+- `GET /api/calls/token?channel=<channel>` - Generate an authenticated Agora RTC token
 
-Protected routes require this header:
+Protected routes require `Authorization: Bearer <jwt-token>`.
 
-```http
-Authorization: Bearer <your-jwt-token>
+## Frontend Connection
+
+The frontend expects REST and Agora token requests through Vite's `/api` proxy to port `5000`, Socket.IO at `http://localhost:5000`, and frontend origin `http://localhost:5173` for CORS.
+
+Start the frontend in a second terminal:
+
+```powershell
+cd frontend
+npm install
+npm run dev
 ```
 
-## Socket.IO
+## Production Notes
 
-The server accepts Socket.IO connections and supports online presence, typing indicators, and WebRTC call signaling.
-
-During local development, the Socket.IO CORS configuration expects the frontend at:
-
-```text
-http://localhost:5173
-```
-
-## GitHub Checklist
-
-Before pushing the project:
-
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin <your-github-repository-url>
-git push -u origin main
-```
-
-Confirm that secrets, `.env`, `node_modules`, and build output are excluded by `.gitignore` before running `git add .`.
+- Use hosted MongoDB and HTTPS.
+- Restrict CORS to the deployed frontend origin.
+- Keep Agora certificates and all server secrets on the backend only.
