@@ -48,6 +48,27 @@ body {
   min-width: 0;
 }
 
+.chat-contact-summary {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chat-contact-summary > div:last-child {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chat-contact-summary > div:last-child > div {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-call-actions {
+  position: relative;
+  z-index: 2;
+}
+
 .chat-messages {
   min-height: 0;
   overscroll-behavior: contain;
@@ -92,6 +113,15 @@ body {
     min-height: 64px !important;
     flex: 0 0 64px !important;
     position: relative;
+  }
+
+  .chat-call-actions {
+    gap: 4px !important;
+  }
+
+  .chat-call-actions button {
+    width: 36px !important;
+    height: 36px !important;
   }
 }
 

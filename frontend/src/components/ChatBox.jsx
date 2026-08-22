@@ -567,6 +567,7 @@ const sendSticker = async (sticker) => {
           </button>
 
           <div
+            className="chat-contact-summary"
             onClick={() => setShowProfile(!showProfile)}
             style={{
               display: "flex",
@@ -643,7 +644,7 @@ const sendSticker = async (sticker) => {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
+          <div className="chat-call-actions" style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
             {[
               {
                 icon: "phone",
