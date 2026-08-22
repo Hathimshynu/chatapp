@@ -59,6 +59,7 @@ body {
   .chatbox-root {
     height: 100dvh !important;
     min-height: 0;
+    width: 100%;
   }
 
   .chatbox-main {
@@ -66,11 +67,10 @@ body {
   }
 
   .chat-profile-panel {
-    position: absolute;
-    inset: 0;
-    z-index: 30;
     width: 100% !important;
-    height: 100% !important;
+    height: 64px !important;
+    min-height: 64px;
+    position: relative;
   }
 }
 
