@@ -41,6 +41,11 @@ body {
   min-height: 0;
 }
 
+.chat-profile-panel {
+  flex: 0 0 64px;
+  box-sizing: border-box;
+}
+
 @media (max-width: 767px) {
   .home-shell {
     height: 100dvh !important;
@@ -69,7 +74,8 @@ body {
   .chat-profile-panel {
     width: 100% !important;
     height: 64px !important;
-    min-height: 64px;
+    min-height: 64px !important;
+    flex: 0 0 64px !important;
     position: relative;
   }
 }
