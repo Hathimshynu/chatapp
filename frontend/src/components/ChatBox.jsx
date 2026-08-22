@@ -430,6 +430,7 @@ const sendSticker = async (sticker) => {
 
   return (
     <div
+      className="chatbox-root"
       style={{
         flex: 1,
         display: "flex",
@@ -441,6 +442,7 @@ const sendSticker = async (sticker) => {
       {/* ── Call Overlay ── */}
       {callState && (
         <div
+          className="chatbox-main"
           style={{
             position: "absolute",
             inset: 0,
@@ -524,6 +526,7 @@ const sendSticker = async (sticker) => {
       >
         {/* Header */}
         <div
+          className="chat-profile-panel"
           style={{
             background: "linear-gradient(135deg, #128C7E, #075E54)",
             padding: "0 16px",

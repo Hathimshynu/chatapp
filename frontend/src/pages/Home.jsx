@@ -17,7 +17,7 @@ export default function Home() {
   };
 
   return (
-    <div style={{
+    <div className="home-shell" style={{
       display: 'flex', height: '100vh',
       width: '100vw', overflow: 'hidden',
       background: '#f0f2f5'
