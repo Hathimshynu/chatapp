@@ -291,6 +291,7 @@ const sendSticker = async (sticker) => {
   if (!conversation) {
     return (
       <div
+        className="chatbox-content"
         style={{
           flex: 1,
           display: "flex",
@@ -687,6 +688,7 @@ const sendSticker = async (sticker) => {
 
         {/* Messages */}
         <div
+          className="chat-messages"
           style={{
             flex: 1,
             overflowY: "auto",
@@ -1003,6 +1005,7 @@ const sendSticker = async (sticker) => {
 
         {/* Input bar */}
         <div
+          className="chat-composer"
           style={{
             background: "#f0f2f5",
             padding: "10px 12px",
