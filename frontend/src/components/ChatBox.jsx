@@ -1143,7 +1143,7 @@ const sendSticker = async (sticker) => {
               borderRadius: "50%",
               background: text.trim()
                 ? "linear-gradient(135deg, #128C7E, #075E54)"
-                : "#e0e0e0",
+                : "#72b331",
               border: "none",
               color: "white",
               fontSize: "18px",
@@ -1155,11 +1155,30 @@ const sendSticker = async (sticker) => {
               flexShrink: 0,
               boxShadow: text.trim()
                 ? "0 3px 12px rgba(18,140,126,0.45)"
-                : "none",
+                : "0 2px 8px rgba(114,179,49,0.3)",
               transform: text.trim() ? "scale(1.05)" : "scale(1)",
             }}
           >
-            {text.trim() ? "➤" : "🎤"}
+            {text.trim() ? (
+              "➤"
+            ) : (
+              <svg
+                width="25"
+                height="25"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-label="Voice message"
+              >
+                <rect x="8" y="3" width="8" height="12" rx="4" />
+                <path d="M5 11a7 7 0 0 0 14 0" />
+                <path d="M12 18v3" />
+                <path d="M8 21h8" />
+              </svg>
+            )}
           </button>
         </div>
       </div>
