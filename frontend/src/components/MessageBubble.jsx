@@ -88,6 +88,13 @@ export default function MessageBubble({ message, isMine, onReply }) {
             <span style={{ color: "#aaa", fontStyle: "italic", fontSize: "14px" }}>
               🚫 This message was deleted
             </span>
+          ) : message.messageType === "audio" && message.audio ? (
+            <audio
+              controls
+              preload="metadata"
+              src={message.audio}
+              style={{ display: "block", maxWidth: "220px" }}
+            />
           ) : message.image ? (
             <img
               src={message.image}
@@ -113,7 +120,7 @@ export default function MessageBubble({ message, isMine, onReply }) {
           )}
 
           {/* Time + ticks — hide for stickers */}
-          {message.messageType !== "sticker" && (
+          {message.messageType !== "sticker" && message.messageType !== "audio" && (
             <div style={{
               display: "flex", alignItems: "center",
               justifyContent: "flex-end", gap: "3px",

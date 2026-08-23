@@ -58,12 +58,14 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
     channel.bind('new-message', (payload) => {
       const {
         messageId, conversationId, sender,
-        text, hasImage, messageType, createdAt, seen
+        text, hasImage, hasAudio, messageType, createdAt, seen
       } = payload;
 
-      const previewText = hasImage
-        ? (messageType === 'sticker' ? '🎭 Sticker' : '📷 Photo')
-        : text;
+      const previewText = messageType === 'audio' || hasAudio
+        ? '🎙️ Voice message'
+        : hasImage
+          ? (messageType === 'sticker' ? '🎭 Sticker' : '📷 Photo')
+          : text;
 
       const previewMessage = {
         _id: messageId,
@@ -103,11 +105,13 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
 
     // Sender's own sidebar update
     channel.bind('message-sent', (payload) => {
-      const { messageId, conversationId, sender, text, hasImage, messageType, createdAt, seen } = payload;
+      const { messageId, conversationId, sender, text, hasImage, hasAudio, messageType, createdAt, seen } = payload;
 
-      const previewText = hasImage
-        ? (messageType === 'sticker' ? '🎭 Sticker' : '📷 Photo')
-        : text;
+      const previewText = messageType === 'audio' || hasAudio
+        ? '🎙️ Voice message'
+        : hasImage
+          ? (messageType === 'sticker' ? '🎭 Sticker' : '📷 Photo')
+          : text;
 
       const previewMessage = {
         _id: messageId, sender,

@@ -9,6 +9,7 @@ React and Vite frontend for the ChatApp messaging application.
 - Real-time messages, typing indicators, online presence, and read receipts
 - Image messages, stickers, GIFs, replies, and message previews
 - Audio and video calls through Agora RTC
+- Voice message recording and playback
 - Incoming call notifications and call controls
 
 ## Requirements

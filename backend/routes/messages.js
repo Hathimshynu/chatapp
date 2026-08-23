@@ -18,6 +18,11 @@ router.get('/single/:messageId', protect, async (req, res) => {
     const message = await Message.findById(req.params.messageId)
     .populate('sender', 'name avatar');
     if (!message) return res.status(404).json({ message: 'Not found' });
+    const conversation = await require('../models/Conversation').findOne({
+      _id: message.conversationId,
+      participants: req.user._id,
+    });
+    if (!conversation) return res.status(403).json({ message: 'Access denied' });
     res.json(message);
   } catch (err) {
     res.status(500).json({ message: err.message });

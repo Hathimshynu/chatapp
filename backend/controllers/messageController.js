@@ -78,7 +78,7 @@ const getMessages = async (req, res) => {
 
 const sendMessage = async (req, res) => {
   try {
-    const { receiverId, text, image, messageType } = req.body;
+    const { receiverId, text, image, audio, messageType } = req.body;
 
     if (!receiverId) {
       return res.status(400).json({ message: 'Receiver is required' });
@@ -101,6 +101,7 @@ const sendMessage = async (req, res) => {
       sender: req.user._id,
       text: text || '',
       image: image || '',
+      audio: audio || '',
       messageType: messageType || 'text',
       seen: [req.user._id]
     });
@@ -122,6 +123,7 @@ const sendMessage = async (req, res) => {
       conversationId: conversation._id.toString(),
       text:           (text || '').slice(0, 500), // max 500 chars
       hasImage:       !!(image),
+      hasAudio:       !!(audio),
       messageType:    messageType || 'text',
       createdAt:      populatedMessage.createdAt,
       seen:           populatedMessage.seen,
@@ -172,6 +174,7 @@ const deleteMessage = async (req, res) => {
     message.deleted = true;
     message.text = 'This message was deleted';
     message.image = '';
+    message.audio = '';
     await message.save();
     res.json({ success: true });
   } catch (error) {

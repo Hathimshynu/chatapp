@@ -20,6 +20,10 @@ const messageSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    audio: {
+      type: String,
+      default: "",
+    },
     seen: [
       {
         type: mongoose.Schema.Types.ObjectId,

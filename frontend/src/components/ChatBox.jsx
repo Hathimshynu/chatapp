@@ -89,7 +89,7 @@ useEffect(() => {
 
   channel.bind('new-message', async (payload) => {
     const {
-      messageId, conversationId, hasImage,
+      messageId, conversationId, hasImage, hasAudio, audio,
       text, sender, createdAt, seen, messageType
     } = payload;
 
@@ -99,7 +99,7 @@ useEffect(() => {
       String(conversation._id) !== String(conversationId)
     ) return;
 
-    if (hasImage) {
+    if (hasImage || hasAudio) {
       // ✅ Fetch full message with image from API
       try {
         const { data } = await axios.get(`/api/messages/single/${messageId}`, {
@@ -123,7 +123,8 @@ useEffect(() => {
           sender,
           createdAt,
           seen,
-          messageType: messageType || 'text',
+          messageType: messageType || (audio ? 'audio' : 'text'),
+          audio,
         }];
       });
     }

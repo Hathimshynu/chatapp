@@ -44,7 +44,7 @@ PUSHER_CLUSTER=your-pusher-cluster
 
 AGORA_APP_ID=your-agora-app-id
 APP_CERTIFICATE=your-agora-app-certificate
-FRONTEND_URL=http://localhost:5173
+FRONTEND_URL=http://localhost:5173,https://chatapp-two-rosy.vercel.app
 ```
 
 | Variable | Required | Purpose |
@@ -59,7 +59,7 @@ FRONTEND_URL=http://localhost:5173
 | `PUSHER_CLUSTER` | Yes | Pusher cluster, for example `ap2`. |
 | `AGORA_APP_ID` | Yes | Agora project App ID. |
 | `APP_CERTIFICATE` | Yes | Private Agora certificate used to sign RTC tokens. |
-| `FRONTEND_URL` | Yes | Allowed frontend origin for CORS and Socket.IO. |
+| `FRONTEND_URL` | Yes | Comma-separated frontend origins allowed by CORS and Socket.IO. |
 
 Never commit `.env`, database credentials, Pusher secrets, Agora certificates, or JWT secrets.
 
@@ -83,7 +83,7 @@ For a normal Node process use `npm start`. Run only one backend process on port 
 - `GET /api/users/search` - Search users
 - `GET /api/messages/conversations` - List conversations
 - `GET /api/messages/:conversationId` - Load messages and mark incoming messages read
-- `POST /api/messages/send` - Send text, image, or sticker messages
+- `POST /api/messages/send` - Send text, image, sticker, or audio messages
 - `GET /api/messages/single/:messageId` - Load one complete message
 - `DELETE /api/messages/:messageId` - Delete a message sent by the current user
 - `GET /api/calls/token?channel=<channel>` - Generate an authenticated Agora RTC token
