@@ -92,7 +92,7 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
       });
 
       const currentConv = selectedConvRef.current;
-      if (currentConv?._id !== conversationId) {
+      if (!currentConv?._id || String(currentConv._id) !== String(conversationId)) {
         setUnreadCounts(prev => ({
           ...prev,
           [conversationId]: (prev[conversationId] || 0) + 1
@@ -183,7 +183,7 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
     setActiveTab('chats');
 
     const existing = conversations.find(c =>
-      !c.isGroup && c.participants?.some(p => p._id === otherUser._id)
+      !c.isGroup && c.participants?.some(p => String(p._id) === String(otherUser._id))
     );
     if (existing) { handleSelectConversation(existing); return; }
 
@@ -201,7 +201,9 @@ export default function Sidebar({ selectedConversation, onSelectConversation }) 
     onSelectConversation(tempConversation);
   };
 
-  const getOtherUser = (conv) => conv.participants?.find(p => p._id !== user._id);
+  const getOtherUser = (conv) => conv.participants?.find(
+    p => String(p._id) !== String(user?._id)
+  );
 
   // ✅ Online users — filter from conversations
   const onlineConversations = conversations.filter(c =>

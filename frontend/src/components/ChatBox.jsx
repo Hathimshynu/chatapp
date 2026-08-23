@@ -23,6 +23,7 @@ export default function ChatBox({ conversation, onBack }) {
   const typingTimeoutRef = useRef(null);
   const fileInputRef = useRef(null);
   const inputRef = useRef(null);
+  const messageRequestRef = useRef(0);
   const { user } = useAuth();
   const { socket, onlineUsers } = useSocket();
   const { channel } = usePusher();
@@ -67,13 +68,14 @@ export default function ChatBox({ conversation, onBack }) {
   const isOnline = onlineUsers.includes(otherUser?._id);
 
   useEffect(() => {
+    const requestId = ++messageRequestRef.current;
     setMessages([]);
     setReplyTo(null);
     setShowEmojiPicker(false);
     setShowAttachMenu(false);
     setShowStickerPicker(false);
     if (conversation?._id && !conversation._id.startsWith("temp")) {
-      fetchMessages();
+      fetchMessages(true, requestId);
     }
   }, [conversation?._id]);
 
@@ -93,8 +95,8 @@ useEffect(() => {
 
     // Only handle if this conversation
     if (
-      conversation._id !== conversationId &&
-      !conversation._id?.startsWith('temp')
+      conversation._id?.startsWith('temp') ||
+      String(conversation._id) !== String(conversationId)
     ) return;
 
     if (hasImage) {
@@ -166,12 +168,13 @@ useEffect(() => {
     };
   }, [socket, conversation?._id, user?._id]);
 
-  const fetchMessages = async (showLoader = true) => {
+  const fetchMessages = async (showLoader = true, requestId = messageRequestRef.current) => {
     if (showLoader) setLoading(true);
     try {
       const { data } = await axios.get(`/api/messages/${conversation._id}`, {
         headers: { Authorization: `Bearer ${user.token}` },
       });
+      if (requestId !== messageRequestRef.current) return;
       setMessages(data);
     } catch (err) {
       console.error(err);
@@ -761,7 +764,9 @@ const sendSticker = async (sticker) => {
               <MessageBubble
                 key={msg._id || idx}
                 message={msg}
-                isMine={msg.sender?._id === user._id || msg.sender === user._id}
+                isMine={
+                  String(msg.sender?._id || msg.sender) === String(user?._id)
+                }
                 onReply={() => setReplyTo(msg)}
               />
             ))

@@ -2,7 +2,9 @@ export default function ConversationItem({
   conversation, currentUser, isSelected,
   isOnline, onClick, unreadCount = 0
 }) {
-  const other = conversation.participants?.find(p => p._id !== currentUser._id);
+  const other = conversation.participants?.find(
+    p => String(p._id) !== String(currentUser?._id)
+  );
   const lastMsg = conversation.lastMessage;
 
   const formatTime = (date) => {
