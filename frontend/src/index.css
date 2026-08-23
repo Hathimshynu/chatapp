@@ -13,6 +13,7 @@ body {
   height: 100%;
   width: 100%;
   overflow-x: hidden;
+  overflow-y: hidden;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
     Roboto, Oxygen, Ubuntu, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -44,6 +45,12 @@ body {
   min-height: 0;
 }
 
+.chatbox-root,
+.chatbox-content,
+.chatbox-main {
+  height: 100%;
+}
+
 .chatbox-content {
   min-width: 0;
 }
@@ -71,6 +78,7 @@ body {
 
 .chat-messages {
   min-height: 0;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
@@ -96,12 +104,14 @@ body {
     height: 100dvh !important;
     min-height: 0 !important;
     overflow: hidden;
+    flex: 1 1 auto;
   }
 
   .chatbox-root {
     height: 100dvh !important;
     min-height: 0;
     width: 100%;
+    flex: 1 1 auto;
   }
 
   .chatbox-content {
@@ -116,6 +126,7 @@ body {
     min-height: 64px !important;
     flex: 0 0 64px !important;
     position: relative;
+    overflow: visible;
   }
 
   .chat-call-actions {
@@ -125,6 +136,19 @@ body {
   .chat-call-actions button {
     width: 36px !important;
     height: 36px !important;
+  }
+
+  .chatbox-root > div:last-child {
+    height: 100% !important;
+    min-height: 0;
+  }
+
+  .chat-messages {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
   }
 }
 
