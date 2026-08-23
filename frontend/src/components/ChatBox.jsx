@@ -226,6 +226,7 @@ useEffect(() => {
       });
     }
 
+    setShowEmojiPicker(false);
     socket?.emit('stopTyping', { receiverId: otherUser._id });
   } catch (err) {
     console.error('sendMessage error:', err);
@@ -1142,7 +1143,6 @@ const sendSticker = async (sticker) => {
 
           <button
             onClick={sendMessage}
-            disabled={!text.trim()}
             style={{
               width: "44px",
               height: "44px",

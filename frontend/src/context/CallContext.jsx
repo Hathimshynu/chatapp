@@ -14,11 +14,13 @@ export const CallProvider = ({ children }) => {
   const [callType, setCallType]           = useState('audio');
   const [otherUser, setOtherUser]         = useState(null);
   const [isMuted, setIsMuted]             = useState(false);
+  const [isSpeakerOn, setIsSpeakerOn]     = useState(true);
   const [incomingData, setIncomingData]   = useState(null);
   const [showBanner, setShowBanner]       = useState(false);
   const {
     remoteStream, callDuration, formatDuration,
     joinCall, toggleMute, endCall,
+    toggleSpeaker,
     startRingtone, stopRingtone,
   } = useWebRTC({ socket, user });
 
@@ -61,6 +63,7 @@ export const CallProvider = ({ children }) => {
       endCall();
       setCallState(null);
       setOtherUser(null);
+      setIsSpeakerOn(true);
       alert(`Call ended: ${reason}`);
     });
 
@@ -71,6 +74,7 @@ export const CallProvider = ({ children }) => {
       setCallState(null);
       setOtherUser(null);
       setIsMuted(false);
+      setIsSpeakerOn(true);
     });
 
     // Call was cancelled before pickup
@@ -79,6 +83,7 @@ export const CallProvider = ({ children }) => {
       setShowBanner(false);
       setIncomingData(null);
       setCallState(null);
+      setIsSpeakerOn(true);
     });
 
     return () => {
@@ -103,6 +108,7 @@ export const CallProvider = ({ children }) => {
     setCallType(type);
     setCallState('outgoing');
     setIsMuted(false);
+    setIsSpeakerOn(true);
 
     try {
       const channelName = getChannelName(callerId, receiverId);
@@ -166,6 +172,7 @@ export const CallProvider = ({ children }) => {
     setCallState(null);
     setOtherUser(null);
     setIsMuted(false);
+    setIsSpeakerOn(true);
     setIncomingData(null);
   }, [otherUser, callState, socket, endCall, stopRingtone]);
 
@@ -174,6 +181,10 @@ export const CallProvider = ({ children }) => {
     const muted = toggleMute();
     setIsMuted(muted);
   }, [toggleMute]);
+
+  const handleToggleSpeaker = useCallback(() => {
+    setIsSpeakerOn(toggleSpeaker());
+  }, [toggleSpeaker]);
 
   return (
     <CallContext.Provider value={{ startCall }}>
@@ -196,6 +207,7 @@ export const CallProvider = ({ children }) => {
           callType={callType}
           otherUser={otherUser}
           isMuted={isMuted}
+          isSpeakerOn={isSpeakerOn}
           callDuration={callDuration}
           formatDuration={formatDuration}
           remoteStream={remoteStream}
@@ -203,6 +215,7 @@ export const CallProvider = ({ children }) => {
           onReject={rejectCall}
           onEnd={hangUp}
           onToggleMute={handleToggleMute}
+          onToggleSpeaker={handleToggleSpeaker}
         />
       )}
     </CallContext.Provider>

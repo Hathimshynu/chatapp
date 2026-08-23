@@ -6,6 +6,7 @@ export default function CallModal({
   callType,         // 'audio'
   otherUser,        // { name, avatar }
   isMuted,
+  isSpeakerOn,
   callDuration,
   formatDuration,
   remoteStream,
@@ -15,6 +16,7 @@ export default function CallModal({
   onReject,
   onEnd,
   onToggleMute,
+  onToggleSpeaker,
 }) {
   const remoteAudioRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -227,16 +229,16 @@ export default function CallModal({
             </p>
           </div>
 
-          {/* Speaker (visual only) */}
+          {/* Speaker */}
           <div style={{ textAlign: 'center' }}>
-            <button style={{
+            <button onClick={onToggleSpeaker} aria-label={isSpeakerOn ? 'Mute speaker' : 'Unmute speaker'} style={{
               width: '60px', height: '60px', borderRadius: '50%',
-              background: 'rgba(255,255,255,0.15)',
+              background: isSpeakerOn ? 'rgba(255,255,255,0.15)' : '#ef4444',
               border: '2px solid rgba(255,255,255,0.2)',
               cursor: 'pointer', fontSize: '22px', color: 'white',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>🔊</button>
-            <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', marginTop: '8px' }}>Speaker</p>
+            }}>{isSpeakerOn ? '🔊' : '🔇'}</button>
+            <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', marginTop: '8px' }}>{isSpeakerOn ? 'Speaker' : 'Muted'}</p>
           </div>
 
           {/* End call */}
@@ -251,7 +253,7 @@ export default function CallModal({
             }}
               onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.1)'}
               onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
-            >📵</button>
+            >📞</button>
             <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', marginTop: '8px' }}>End Call</p>
           </div>
         </div>

@@ -9,6 +9,8 @@ export default function useWebRTC({ user }) {
   const localTracksRef = useRef([]);
   const timerRef = useRef(null);
   const ringtoneRef = useRef(null);
+  const remoteAudioTracksRef = useRef([]);
+  const speakerMutedRef = useRef(false);
 
   // ── Start ringtone ───────────────────────────────────────────────
   const startRingtone = useCallback(() => {
@@ -73,6 +75,7 @@ export default function useWebRTC({ user }) {
     client.on('user-published', async (remoteUser, mediaType) => {
       await client.subscribe(remoteUser, mediaType);
       if (mediaType === 'audio' && remoteUser.audioTrack) {
+        remoteAudioTracksRef.current.push(remoteUser.audioTrack);
         remoteUser.audioTrack.play();
       }
       if (mediaType === 'video') setRemoteStream(remoteUser.videoTrack);
@@ -81,12 +84,22 @@ export default function useWebRTC({ user }) {
       if (mediaType === 'video') setRemoteStream(null);
     });
     await client.join(data.appId, channelName, data.token, null);
-    const tracks = await AgoraRTC.createMicrophoneAndCameraTracks({}, { encoderConfig: '480p_1' });
-    localTracksRef.current = callType === 'video' ? tracks : [tracks[0]];
-    if (callType !== 'video') tracks[1].close();
+    const tracks = callType === 'video'
+      ? await AgoraRTC.createMicrophoneAndCameraTracks({}, { encoderConfig: '480p_1' })
+      : [await AgoraRTC.createMicrophoneAudioTrack()];
+    localTracksRef.current = tracks;
     await client.publish(localTracksRef.current);
     startTimer();
   }, [startTimer, user?.token]);
+
+  const toggleSpeaker = useCallback(() => {
+    const shouldMuteRemoteAudio = !speakerMutedRef.current;
+    remoteAudioTracksRef.current.forEach(track => {
+      track.setVolume(shouldMuteRemoteAudio ? 0 : 100);
+    });
+    speakerMutedRef.current = shouldMuteRemoteAudio;
+    return !shouldMuteRemoteAudio;
+  }, []);
 
   // ── Toggle mute ──────────────────────────────────────────────────
   const toggleMute = useCallback(() => {
@@ -103,6 +116,8 @@ export default function useWebRTC({ user }) {
 
     localTracksRef.current.forEach(track => track.close());
     localTracksRef.current = [];
+    remoteAudioTracksRef.current = [];
+    speakerMutedRef.current = false;
     if (clientRef.current) {
       await clientRef.current.leave();
       clientRef.current.removeAllListeners();
@@ -117,6 +132,7 @@ export default function useWebRTC({ user }) {
     formatDuration,
     joinCall,
     toggleMute,
+    toggleSpeaker,
     endCall,
     startRingtone,
     stopRingtone,
