@@ -10,8 +10,10 @@ const generateToken = (id) => {
 const register = async (req, res) => {
   try {
     const { name, email, password } = req.body;
+    const normalizedName = name?.trim();
+    const normalizedEmail = email?.trim().toLowerCase();
 
-    if (!name || !email || !password) {
+    if (!normalizedName || !normalizedEmail || !password) {
       return res.status(400).json({ message: 'Please provide all fields' });
     }
 
@@ -19,17 +21,26 @@ const register = async (req, res) => {
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
     }
 
-    const userExists = await User.findOne({ email });
-    if (userExists) {
-      return res.status(400).json({ message: 'User already exists' });
+    const [emailExists, nameExists] = await Promise.all([
+      User.exists({ email: normalizedEmail }),
+      User.exists({ name: normalizedName })
+    ]);
+    if (emailExists || nameExists) {
+      const duplicateFields = [
+        emailExists && 'email',
+        nameExists && 'name'
+      ].filter(Boolean);
+      return res.status(400).json({
+        message: `${duplicateFields.join(' and ')} already in use`
+      });
     }
 
     // ✅ Hash password manually here — bypass pre-save hook
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await User.create({
-      name,
-      email,
+      name: normalizedName,
+      email: normalizedEmail,
       password: hashedPassword
     });
 
@@ -44,6 +55,12 @@ const register = async (req, res) => {
 
   } catch (error) {
     console.error('Register error:', error.message);
+    if (error.code === 11000) {
+      const duplicateField = Object.keys(error.keyPattern || {})[0];
+      return res.status(400).json({
+        message: `${duplicateField || 'name or email'} already in use`
+      });
+    }
     res.status(500).json({ message: error.message });
   }
 };
