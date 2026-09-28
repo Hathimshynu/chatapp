@@ -23,7 +23,21 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // Capitalised names are components used as JSX (e.g. `icon: Icon`).
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^[A-Z_]' }],
+      // Only relevant when compiling with React Compiler, which this app doesn't use.
+      'react-hooks/preserve-manual-memoization': 'off',
+      // Resetting state when a subscription/prop changes is intentional in a few places.
+      'react-hooks/set-state-in-effect': 'warn',
     },
+  },
+  {
+    // Context modules export their provider plus a hook.
+    files: ['src/context/**/*.jsx'],
+    rules: { 'react-refresh/only-export-components': 'off' },
+  },
+  {
+    files: ['vite.config.js', 'public/sw.js'],
+    languageOptions: { globals: { ...globals.node, ...globals.serviceworker } },
   },
 ])

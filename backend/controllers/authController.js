@@ -68,7 +68,8 @@ const register = async (req, res) => {
 // @POST /api/auth/login
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { password } = req.body;
+    const email = String(req.body.email || '').trim().toLowerCase();
 
     if (!email || !password) {
       return res.status(400).json({ message: 'Please provide email and password' });

@@ -17,7 +17,11 @@ const conversationSchema = new mongoose.Schema({
   groupAdmin: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
-  }
+  },
+  pinnedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  mutedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
 }, { timestamps: true });
+
+conversationSchema.index({ participants: 1, updatedAt: -1 });
 
 module.exports = mongoose.model('Conversation', conversationSchema);

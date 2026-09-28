@@ -3,29 +3,25 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
+  const backend = env.VITE_API_URL || 'http://127.0.0.1:5000';
 
   return {
     plugins: [react()],
     server: {
+      // Reachable from phones on the same Wi-Fi (http://<your-ip>:5173).
+      host: true,
       proxy: {
-        '/api': {
-          target: env.VITE_API_URL || 'http://127.0.0.1:5000',
-          changeOrigin: true,
-        }
-      },
-      hmr: {
-        overlay: true
+        '/api': { target: backend, changeOrigin: true },
+        '/socket.io': { target: backend, changeOrigin: true, ws: true }
       }
-    },
-    optimizeDeps: {
-      force: true
     },
     build: {
       rollupOptions: {
         output: {
-          entryFileNames: 'assets/[name]-[hash].js',
-          chunkFileNames: 'assets/[name]-[hash].js',
-          assetFileNames: 'assets/[name]-[hash].[ext]'
+          manualChunks: {
+            agora: ['agora-rtc-sdk-ng'],
+            vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'socket.io-client']
+          }
         }
       }
     }

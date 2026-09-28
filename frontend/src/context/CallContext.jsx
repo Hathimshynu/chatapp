@@ -1,221 +1,265 @@
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import toast from 'react-hot-toast';
 import { useAuth } from './AuthContext';
-import { useSocket } from './SocketContext';
-import useWebRTC from '../hooks/useWebRTC';
-import CallModal from '../components/CallModal';
-import IncomingCallBanner from '../components/IncomingCallBanner';
+import { useSocket, useSocketEvent } from './SocketContext';
+import useAgoraCall from '../hooks/useAgoraCall';
+import CallScreen from '../components/call/CallScreen';
+import IncomingCallBanner from '../components/call/IncomingCallBanner';
+import MinimizedCall from '../components/call/MinimizedCall';
+import { playEndTone, startRingtone } from '../lib/sounds';
+import { showNotification } from '../lib/notify';
 
-const CallContext = createContext();
+const CallContext = createContext(null);
 
+const ENDED_SCREEN_MS = 1800;
+
+const describeEnd = ({ status, endedBy }, myId, direction) => {
+  if (status === 'completed') return 'Call ended';
+  if (status === 'declined') return direction === 'outgoing' ? 'Call declined' : 'Call ended';
+  if (status === 'busy') return 'Busy on another call';
+  if (!endedBy) return direction === 'outgoing' ? 'No answer' : 'Missed call';
+  return String(endedBy) === String(myId) ? 'Call cancelled' : 'Call ended';
+};
+
+const isDesktop = () => window.matchMedia('(min-width: 768px) and (pointer: fine)').matches;
+
+// call.status: 'outgoing' (ringing them) | 'incoming' (ringing me) | 'connecting' | 'active' | 'ended'
 export const CallProvider = ({ children }) => {
-  const { user }           = useAuth();
-  const { socket }         = useSocket();
-  const [callState, setCallState]         = useState(null);  // null | 'outgoing' | 'incoming' | 'active'
-  const [callType, setCallType]           = useState('audio');
-  const [otherUser, setOtherUser]         = useState(null);
-  const [isMuted, setIsMuted]             = useState(false);
-  const [isSpeakerOn, setIsSpeakerOn]     = useState(true);
-  const [incomingData, setIncomingData]   = useState(null);
-  const [showBanner, setShowBanner]       = useState(false);
-  const {
-    remoteStream, callDuration, formatDuration,
-    joinCall, toggleMute, endCall,
-    toggleSpeaker,
-    startRingtone, stopRingtone,
-  } = useWebRTC({ socket, user });
+  const { user } = useAuth();
+  const { socket } = useSocket();
+  const [call, setCall] = useState(null);
+  const [minimized, setMinimized] = useState(false);
+  const callRef = useRef(null);
+  const stopRingRef = useRef(null);
+  const wakeLockRef = useRef(null);
+  const clearTimerRef = useRef(null);
 
-  const getChannelName = useCallback((firstId, secondId) => {
-    if (!firstId || !secondId || firstId === 'undefined' || secondId === 'undefined') {
-      throw new Error('Unable to start call: user information is incomplete.');
-    }
-    return `chatapp-${[String(firstId), String(secondId)].sort().join('-')}`;
+  const updateCall = useCallback((patch) => {
+    const next = patch === null ? null : { ...callRef.current, ...patch };
+    callRef.current = next;
+    setCall(next);
+    if (!next) setMinimized(false);
   }, []);
 
-  // ── Socket listeners ─────────────────────────────────────────────
-  useEffect(() => {
-    if (!socket) return;
+  const stopRing = useCallback(() => {
+    stopRingRef.current?.();
+    stopRingRef.current = null;
+  }, []);
 
-    // Someone is calling us
-    socket.on('incomingCall', ({ callerId, callerName, callerAvatar, callType, socketId, channelName }) => {
-      const normalizedCallType = callType === 'video' ? 'video' : 'audio';
-      setIncomingData({ callerId, callerName, callerAvatar, callType: normalizedCallType, socketId, channelName });
-      setOtherUser({ _id: callerId, name: callerName, avatar: callerAvatar });
-      setCallType(normalizedCallType);
+  const ring = useCallback((kind) => {
+    stopRing();
+    stopRingRef.current = startRingtone(kind);
+  }, [stopRing]);
 
-      if (callState === 'active') {
-        // Already on a call — auto reject
-        socket.emit('rejectCall', { callerId });
+  const releaseWakeLock = () => {
+    wakeLockRef.current?.release?.().catch?.(() => {});
+    wakeLockRef.current = null;
+  };
+
+  const markActive = useCallback(() => {
+    const current = callRef.current;
+    if (!current || current.status === 'active' || current.status === 'ended') return;
+    stopRing();
+    updateCall({ status: 'active', startedAt: Date.now() });
+    // Keep the phone screen awake during the call.
+    navigator.wakeLock?.request('screen').then(lock => { wakeLockRef.current = lock; }).catch(() => {});
+  }, [stopRing, updateCall]);
+
+  const onRemoteLeftRef = useRef(() => {});
+  const agora = useAgoraCall({
+    onRemoteJoined: markActive,
+    onRemoteLeft: (reason) => onRemoteLeftRef.current(reason)
+  });
+  const { leave } = agora;
+
+  const finish = useCallback((reason, { notifyServer = false, showEndedScreen = true } = {}) => {
+    const current = callRef.current;
+    if (!current || current.status === 'ended') return;
+    stopRing();
+    releaseWakeLock();
+    if (notifyServer && current.callId) socket?.emit('call:end', { callId: current.callId });
+    leave();
+    const wasConnected = current.status === 'active' || current.status === 'connecting';
+    if (wasConnected || current.status === 'outgoing') playEndTone();
+
+    if (!showEndedScreen || current.status === 'incoming') {
+      updateCall(null);
+      return;
+    }
+    updateCall({
+      status: 'ended',
+      endReason: reason,
+      duration: current.startedAt ? Math.round((Date.now() - current.startedAt) / 1000) : 0
+    });
+    setMinimized(false);
+    clearTimeout(clearTimerRef.current);
+    clearTimerRef.current = setTimeout(() => {
+      if (callRef.current?.status === 'ended') updateCall(null);
+    }, ENDED_SCREEN_MS);
+  }, [socket, leave, stopRing, updateCall]);
+
+  useLayoutEffect(() => {
+    onRemoteLeftRef.current = () => {
+      const current = callRef.current;
+      if (current && (current.status === 'active' || current.status === 'connecting')) {
+        finish('Call ended', { notifyServer: true });
+      }
+    };
+  }, [finish]);
+
+  // ── Outgoing ─────────────────────────────────────────────────────
+  const startCall = useCallback((peer, type = 'audio') => {
+    const callType = type === 'video' ? 'video' : 'audio';
+    const current = callRef.current;
+    if (current && current.status !== 'ended') {
+      toast('You are already on a call');
+      return;
+    }
+    if (!socket?.connected) {
+      toast.error('You are offline. Check your connection.');
+      return;
+    }
+    clearTimeout(clearTimerRef.current);
+    updateCall({ status: 'outgoing', direction: 'outgoing', type: callType, peer, callId: null, startedAt: null });
+
+    // Start the camera/mic right away so the preview shows while ringing.
+    const prepared = agora.prepare(callType).then(() => null, error => error);
+
+    socket.emit('call:start', { receiverId: peer._id, type: callType }, async (response = {}) => {
+      if (callRef.current?.status !== 'outgoing' || callRef.current.callId) {
+        // Hung up before the server answered — make sure the other side stops ringing.
+        if (response.callId) socket.emit('call:end', { callId: response.callId });
         return;
       }
-
-      setShowBanner(true);
-      startRingtone();
-    });
-
-    socket.on('callAccepted', () => {
-      stopRingtone();
-      setCallState('active');
-    });
-
-    // Call was rejected
-    socket.on('callRejected', ({ reason }) => {
-      stopRingtone();
-      endCall();
-      setCallState(null);
-      setOtherUser(null);
-      setIsSpeakerOn(true);
-      alert(`Call ended: ${reason}`);
-    });
-
-    // Other side ended
-    socket.on('callEnded', () => {
-      stopRingtone();
-      endCall();
-      setCallState(null);
-      setOtherUser(null);
-      setIsMuted(false);
-      setIsSpeakerOn(true);
-    });
-
-    // Call was cancelled before pickup
-    socket.on('callCancelled', () => {
-      stopRingtone();
-      setShowBanner(false);
-      setIncomingData(null);
-      setCallState(null);
-      setIsSpeakerOn(true);
-    });
-
-    return () => {
-      socket.off('incomingCall');
-      socket.off('callAccepted');
-      socket.off('callRejected');
-      socket.off('callEnded');
-      socket.off('callCancelled');
-    };
-  }, [socket, callState, endCall, startRingtone, stopRingtone]);
-
-  // ── Start outgoing call ──────────────────────────────────────────
-  const startCall = useCallback(async (targetUser, type = 'audio') => {
-    type = type === 'video' ? 'video' : 'audio';
-    const callerId = user?._id || user?.id;
-    const receiverId = targetUser?._id || targetUser?.id;
-    if (!socket || !callerId || !receiverId) {
-      throw new Error('Unable to start call: user information is incomplete.');
-    }
-    const callTarget = { ...targetUser, _id: receiverId };
-    setOtherUser(callTarget);
-    setCallType(type);
-    setCallState('outgoing');
-    setIsMuted(false);
-    setIsSpeakerOn(true);
-
-    try {
-      const channelName = getChannelName(callerId, receiverId);
-      await joinCall(channelName, type);
-      startRingtone();
-      socket.emit('callUser', {
-        receiverId,
-        callType:    type,
-        callerId,
-        callerName:  user.name,
-        callerAvatar: user.avatar || '',
-        channelName
-      });
-    } catch (err) {
-      alert(err.message);
-      setCallState(null);
-      setOtherUser(null);
-      endCall();
-    }
-  }, [socket, user, joinCall, getChannelName, startRingtone, endCall]);
-
-  // ── Accept call ──────────────────────────────────────────────────
-  const acceptCall = useCallback(async () => {
-    if (!incomingData) return;
-    setShowBanner(false);
-    setCallState('active');
-    stopRingtone();
-
-    try {
-      const receiverId = user?._id || user?.id;
-      const channelName = incomingData.channelName || getChannelName(incomingData.callerId, receiverId);
-      await joinCall(channelName, incomingData.callType);
-      socket.emit('acceptCall', { callerId: incomingData.callerId });
-    } catch (err) {
-      alert(err.message);
-      setCallState(null);
-    }
-  }, [incomingData, user?._id, joinCall, getChannelName, socket, stopRingtone]);
-
-  // ── Reject call ──────────────────────────────────────────────────
-  const rejectCall = useCallback(() => {
-    if (!incomingData) return;
-    stopRingtone();
-    socket.emit('rejectCall', { callerId: incomingData.callerId });
-    setShowBanner(false);
-    setIncomingData(null);
-    setCallState(null);
-  }, [incomingData, socket, stopRingtone]);
-
-  // ── End active call ──────────────────────────────────────────────
-  const hangUp = useCallback(() => {
-    if (otherUser?._id) {
-      if (callState === 'outgoing') {
-        socket.emit('cancelCall', { receiverId: otherUser._id });
-      } else {
-        socket.emit('endCall', { receiverId: otherUser._id });
+      if (response.error) {
+        leave();
+        updateCall({ status: 'ended', endReason: response.error, duration: 0 });
+        clearTimerRef.current = setTimeout(() => updateCall(null), 2600);
+        return;
       }
+      updateCall({ callId: response.callId, channelName: response.channelName, peer: { ...peer, ...response.peer, avatar: peer.avatar || response.peer?.avatar } });
+      ring('outgoing');
+
+      const prepareError = await prepared;
+      if (callRef.current?.callId !== response.callId) return; // hung up while the camera started
+      try {
+        if (prepareError) throw prepareError;
+        await agora.join({ channelName: response.channelName, type: callType });
+      } catch (error) {
+        if (error.message === 'cancelled') return;
+        toast.error(error.message);
+        finish('Call failed', { notifyServer: true });
+      }
+    });
+  }, [socket, agora, leave, ring, finish, updateCall]);
+
+  // ── Incoming ─────────────────────────────────────────────────────
+  const acceptCall = useCallback(() => {
+    const current = callRef.current;
+    if (!current || current.status !== 'incoming') return;
+    stopRing();
+    updateCall({ status: 'connecting' });
+    socket.emit('call:accept', { callId: current.callId }, async (response = {}) => {
+      if (response.error) {
+        toast(response.error);
+        updateCall(null);
+        return;
+      }
+      try {
+        await agora.join({ channelName: current.channelName, type: current.type });
+      } catch (error) {
+        toast.error(error.message);
+        finish('Call failed', { notifyServer: true });
+      }
+    });
+  }, [socket, agora, stopRing, updateCall, finish]);
+
+  const rejectCall = useCallback(() => {
+    const current = callRef.current;
+    if (!current || current.status !== 'incoming') return;
+    stopRing();
+    socket?.emit('call:reject', { callId: current.callId });
+    updateCall(null);
+  }, [socket, stopRing, updateCall]);
+
+  const hangUp = useCallback(() => {
+    const current = callRef.current;
+    if (!current) return;
+    if (current.status === 'ended') {
+      updateCall(null);
+      return;
     }
-    stopRingtone();
-    endCall();
-    setCallState(null);
-    setOtherUser(null);
-    setIsMuted(false);
-    setIsSpeakerOn(true);
-    setIncomingData(null);
-  }, [otherUser, callState, socket, endCall, stopRingtone]);
+    finish(current.status === 'outgoing' ? 'Call cancelled' : 'Call ended', { notifyServer: true });
+  }, [finish, updateCall]);
 
-  // ── Toggle mute ──────────────────────────────────────────────────
-  const handleToggleMute = useCallback(() => {
-    const muted = toggleMute();
-    setIsMuted(muted);
-  }, [toggleMute]);
+  // ── Socket events ────────────────────────────────────────────────
+  const onIncoming = useCallback(({ callId, channelName, type, caller }) => {
+    const current = callRef.current;
+    if (current && current.status !== 'ended') {
+      socket?.emit('call:reject', { callId });
+      return;
+    }
+    clearTimeout(clearTimerRef.current);
+    updateCall({ status: 'incoming', direction: 'incoming', callId, channelName, type, peer: caller, startedAt: null });
+    ring('incoming');
+    if (document.visibilityState !== 'visible') {
+      showNotification(`Incoming ${type === 'video' ? 'video' : 'voice'} call`, { body: caller.name, tag: 'incoming-call' });
+    }
+  }, [socket, ring, updateCall]);
 
-  const handleToggleSpeaker = useCallback(() => {
-    setIsSpeakerOn(toggleSpeaker());
-  }, [toggleSpeaker]);
+  const onAccepted = useCallback(({ callId }) => {
+    const current = callRef.current;
+    if (current?.callId !== callId || current.status !== 'outgoing') return;
+    stopRing();
+    updateCall({ status: 'connecting' });
+  }, [stopRing, updateCall]);
+
+  const onEnded = useCallback((payload) => {
+    const current = callRef.current;
+    if (!current || current.callId !== payload.callId) return;
+    finish(describeEnd(payload, user?._id, current.direction));
+  }, [finish, user?._id]);
+
+  const onHandledElsewhere = useCallback(({ callId }) => {
+    const current = callRef.current;
+    if (current?.callId === callId && current.status === 'incoming') {
+      stopRing();
+      updateCall(null);
+    }
+  }, [stopRing, updateCall]);
+
+  useSocketEvent('call:incoming', onIncoming);
+  useSocketEvent('call:accepted', onAccepted);
+  useSocketEvent('call:ended', onEnded);
+  useSocketEvent('call:handled', onHandledElsewhere);
+
+  useEffect(() => () => {
+    stopRing();
+    releaseWakeLock();
+    clearTimeout(clearTimerRef.current);
+  }, [stopRing]);
+
+  const value = useMemo(() => ({ startCall, call }), [startCall, call]);
+
+  const showBanner = call?.status === 'incoming' && isDesktop();
 
   return (
-    <CallContext.Provider value={{ startCall }}>
+    <CallContext.Provider value={value}>
       {children}
-
-      {/* Incoming call banner (small popup) */}
-      {showBanner && incomingData && !callState && (
-        <IncomingCallBanner
-          caller={{ name: incomingData.callerName, avatar: incomingData.callerAvatar }}
-          callType={incomingData.callType}
-          onAccept={acceptCall}
-          onReject={rejectCall}
-        />
+      {call && showBanner && (
+        <IncomingCallBanner call={call} onAccept={acceptCall} onReject={rejectCall} />
       )}
-
-      {/* Full screen call modal */}
-      {callState && (
-        <CallModal
-          callState={callState}
-          callType={callType}
-          otherUser={otherUser}
-          isMuted={isMuted}
-          isSpeakerOn={isSpeakerOn}
-          callDuration={callDuration}
-          formatDuration={formatDuration}
-          remoteStream={remoteStream}
+      {call && !showBanner && minimized && call.status !== 'ended' && call.status !== 'incoming' && (
+        <MinimizedCall call={call} onRestore={() => setMinimized(false)} onEnd={hangUp} />
+      )}
+      {call && !showBanner && !(minimized && call.status !== 'ended' && call.status !== 'incoming') && (
+        <CallScreen
+          call={call}
+          agora={agora}
           onAccept={acceptCall}
           onReject={rejectCall}
           onEnd={hangUp}
-          onToggleMute={handleToggleMute}
-          onToggleSpeaker={handleToggleSpeaker}
+          onMinimize={() => setMinimized(true)}
         />
       )}
     </CallContext.Provider>

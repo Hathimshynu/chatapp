@@ -1,68 +1,61 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useSearchParams } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
 import { SocketProvider } from './context/SocketContext';
-import { PusherProvider } from './context/PusherContext';
+import { ChatProvider } from './context/ChatContext';
 import { CallProvider } from './context/CallContext';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Home from './pages/Home';
 
-const Spinner = () => (
-  <div style={{
-    height: '100vh', width: '100vw', display: 'flex',
-    flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    background: 'linear-gradient(135deg, #e8f5e9, #c8e6c9)'
-  }}>
-    <div style={{ fontSize: '60px', marginBottom: '20px' }}>💬</div>
-    <div style={{
-      width: '44px', height: '44px',
-      border: '4px solid #c8e6c9', borderTop: '4px solid #128C7E',
-      borderRadius: '50%', animation: 'spin 0.8s linear infinite'
-    }} />
-    <p style={{ color: '#128C7E', marginTop: '16px', fontWeight: 700, fontSize: '16px' }}>
-      Loading ChatApp...
-    </p>
-    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-  </div>
-);
+// Everything realtime is keyed by account, so switching accounts starts fresh.
+function Messenger() {
+  const { user } = useAuth();
+  return (
+    <SocketProvider key={user._id}>
+      <ChatProvider>
+        <CallProvider>
+          <Home />
+        </CallProvider>
+      </ChatProvider>
+    </SocketProvider>
+  );
+}
 
-const PrivateRoute = ({ children }) => {
-  const { user, loading } = useAuth();
-  if (loading) return <Spinner />;
-  return user ? children : <Navigate to="/login" replace />;
-};
-
-const PublicRoute = ({ children }) => {
-  const { user, loading } = useAuth();
-  if (loading) return <Spinner />;
-  return user ? <Navigate to="/" replace /> : children;
-};
+function PublicOnly({ children }) {
+  const { user } = useAuth();
+  const [params] = useSearchParams();
+  // "?add=1" lets a signed-in user add another account.
+  if (user && params.get('add') !== '1') return <Navigate to="/" replace />;
+  return children;
+}
 
 function AppRoutes() {
+  const { user } = useAuth();
   return (
     <Routes>
-      <Route path="/login"    element={<PublicRoute><Login /></PublicRoute>} />
-      <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
-      <Route path="/"         element={<PrivateRoute><Home /></PrivateRoute>} />
-      <Route path="*"         element={<Navigate to="/" replace />} />
+      <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+      <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
+      <Route path="/" element={user ? <Messenger /> : <Navigate to="/login" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <SocketProvider>
-        <PusherProvider>
-          <CallProvider>
-            <BrowserRouter>
-              <Toaster position="top-center" toastOptions={{ duration: 3000 }} />
-              <AppRoutes />
-            </BrowserRouter>
-          </CallProvider>
-        </PusherProvider>
-      </SocketProvider>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <BrowserRouter>
+          <Toaster
+            position="top-center"
+            toastOptions={{ duration: 3000, className: 'toast' }}
+            containerStyle={{ top: 'calc(env(safe-area-inset-top) + 12px)' }}
+          />
+          <AppRoutes />
+        </BrowserRouter>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }

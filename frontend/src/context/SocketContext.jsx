@@ -1,61 +1,78 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
+import { SOCKET_URL } from '../lib/api';
 
-const SocketContext = createContext();
+const SocketContext = createContext(null);
 
 export const SocketProvider = ({ children }) => {
+  const { user } = useAuth();
   const [socket, setSocket] = useState(null);
-  const [onlineUsers, setOnlineUsers] = useState([]);
-  const { user, loading } = useAuth();
+  const [connected, setConnected] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState(() => new Set());
+  const [lastSeen, setLastSeen] = useState({});
 
   useEffect(() => {
-    // ✅ Don't connect until auth is done loading
-    if (loading) return;
+    if (!user?.token) return;
 
-    if (!user) {
-      if (socket) {
-        socket.close();
-        setSocket(null);
-        setOnlineUsers([]);
-      }
-      return;
-    }
-
-    // ✅ Create socket only when user is confirmed
-    const socketUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-    const newSocket = io(socketUrl, {
+    const s = io(SOCKET_URL, {
+      auth: { token: user.token },
+      transports: ['websocket', 'polling'],
       reconnection: true,
-      reconnectionAttempts: 10,
       reconnectionDelay: 1000,
-      transports: ['websocket', 'polling']
+      reconnectionDelayMax: 8000
     });
 
-    newSocket.on('connect', () => {
-      newSocket.emit('userOnline', user._id);
+    s.on('connect', () => setConnected(true));
+    s.on('disconnect', () => setConnected(false));
+    s.on('presence:list', (ids) => setOnlineUsers(new Set(ids.map(String))));
+    s.on('presence', ({ userId, online, lastSeen: seenAt }) => {
+      setOnlineUsers(prev => {
+        const next = new Set(prev);
+        if (online) next.add(String(userId));
+        else next.delete(String(userId));
+        return next;
+      });
+      if (seenAt) setLastSeen(prev => ({ ...prev, [userId]: seenAt }));
     });
 
-    newSocket.on('reconnect', () => {
-      newSocket.emit('userOnline', user._id);
-    });
-
-    newSocket.on('onlineUsers', (users) => {
-      setOnlineUsers(users);
-    });
-
-    setSocket(newSocket);
-
-    return () => {
-      newSocket.close();
-      setSocket(null);
+    // Phones suspend background tabs; reconnect as soon as the app is visible again.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && !s.connected) s.connect();
     };
-  }, [user?._id, loading]);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onVisible);
 
-  return (
-    <SocketContext.Provider value={{ socket, onlineUsers }}>
-      {children}
-    </SocketContext.Provider>
+    setSocket(s);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onVisible);
+      s.close();
+      setSocket(null);
+      setConnected(false);
+      setOnlineUsers(new Set());
+    };
+  }, [user?.token]);
+
+  const isOnline = useCallback((id) => !!id && onlineUsers.has(String(id)), [onlineUsers]);
+
+  const value = useMemo(
+    () => ({ socket, connected, onlineUsers, isOnline, lastSeen }),
+    [socket, connected, onlineUsers, isOnline, lastSeen]
   );
+
+  return <SocketContext.Provider value={value}>{children}</SocketContext.Provider>;
 };
 
 export const useSocket = () => useContext(SocketContext);
+
+// Subscribe to a socket event for the lifetime of a component. Uses the specific
+// handler for cleanup so several components can listen to the same event.
+export const useSocketEvent = (event, handler) => {
+  const { socket } = useSocket();
+  useEffect(() => {
+    if (!socket) return;
+    socket.on(event, handler);
+    return () => socket.off(event, handler);
+  }, [socket, event, handler]);
+};
