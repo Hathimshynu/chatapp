@@ -206,15 +206,39 @@ export const ChatProvider = ({ children }) => {
       refresh(); // we were just added / created
       return;
     }
-    // Merge shared fields; keep per-user fields (unread, pinned, muted).
+    // Merge shared fields; keep per-user fields (unread, pinned, muted, archived).
     patchConversation(conversationId, c => {
+      const { participantIds, ...shared } = group;
       const myRole = group.members?.find(m => String(m.user) === myId)?.role || null;
-      const next = { ...group, myRole };
+      const next = { ...shared, myRole };
       if (myRole !== 'admin') next.inviteCode = undefined;
       else if (c.inviteCode) next.inviteCode = c.inviteCode;
+      // Keep participants in sync with membership; profiles come from the refetch below.
+      if (participantIds) next.participants = (c.participants || []).filter(p => participantIds.includes(String(p._id)));
       return next;
     });
+    // Member profiles are privacy-masked per viewer, so fetch my own view of them.
+    axios.get(`/api/groups/${conversationId}`)
+      .then(({ data }) => {
+        const fresh = { ...data }; // keep my live unread count and last message
+        delete fresh.unreadCount;
+        delete fresh.lastMessage;
+        patchConversation(conversationId, fresh);
+      })
+      .catch(() => {});
   }, [conversationsRef, refresh, patchConversation, myId]);
+
+  // Pin / mute / archive changed in another tab or device of mine.
+  const onConversationUpdated = useCallback(({ conversationId, ...flags }) => {
+    patchConversation(conversationId, flags);
+  }, [patchConversation]);
+
+  // I blocked/unblocked someone (possibly in another tab).
+  const onBlockUpdated = useCallback(({ userId, blocked }) => {
+    setConversations(prev => prev.map(c => (!c.isGroup && c.participants?.some(p => String(p._id) === String(userId))
+      ? { ...c, blockedByMe: blocked }
+      : c)));
+  }, []);
 
   const onGroupRemoved = useCallback(({ conversationId, reason }) => {
     setConversations(prev => prev.filter(c => String(c._id) !== String(conversationId)));
@@ -234,6 +258,8 @@ export const ChatProvider = ({ children }) => {
   useSocketEvent('user:updated', onUserUpdated);
   useSocketEvent('group:updated', onGroupUpdated);
   useSocketEvent('group:removed', onGroupRemoved);
+  useSocketEvent('conversation:updated', onConversationUpdated);
+  useSocketEvent('block:updated', onBlockUpdated);
 
   useEffect(() => () => Object.values(typingTimers.current).forEach(clearTimeout), []);
 
@@ -241,7 +267,7 @@ export const ChatProvider = ({ children }) => {
   const setFlag = useCallback(async (conversationId, flag, value) => {
     patchConversation(conversationId, { [flag]: value });
     try {
-      await axios.post(`/api/messages/conversation/${conversationId}/${flag === 'pinned' ? 'pin' : 'mute'}`, { value });
+      await axios.post(`/api/messages/conversation/${conversationId}/${{ pinned: 'pin', muted: 'mute', archived: 'archive' }[flag]}`, { value });
     } catch (error) {
       patchConversation(conversationId, { [flag]: !value });
       toast.error(errorMessage(error));
@@ -250,6 +276,21 @@ export const ChatProvider = ({ children }) => {
 
   const togglePin = useCallback((conversation) => setFlag(conversation._id, 'pinned', !conversation.pinned), [setFlag]);
   const toggleMute = useCallback((conversation) => setFlag(conversation._id, 'muted', !conversation.muted), [setFlag]);
+  // Archived chats stay archived when new messages arrive (WhatsApp's default);
+  // their unread count keeps growing and shows on the "Archived" row instead.
+  const toggleArchive = useCallback((conversation) => setFlag(conversation._id, 'archived', !conversation.archived), [setFlag]);
+
+  const setBlocked = useCallback(async (userId, blocked) => {
+    try {
+      if (blocked) await axios.post(`/api/users/${userId}/block`);
+      else await axios.delete(`/api/users/${userId}/block`);
+      onBlockUpdated({ userId, blocked });
+      return true;
+    } catch (error) {
+      toast.error(errorMessage(error));
+      return false;
+    }
+  }, [onBlockUpdated]);
 
   const clearChat = useCallback(async (conversationId) => {
     try {
@@ -263,7 +304,7 @@ export const ChatProvider = ({ children }) => {
   }, [patchConversation]);
 
   const totalUnread = useMemo(
-    () => conversations.reduce((sum, c) => sum + (c.muted ? 0 : c.unreadCount || 0), 0),
+    () => conversations.reduce((sum, c) => sum + (c.muted || c.archived ? 0 : c.unreadCount || 0), 0),
     [conversations]
   );
 
@@ -277,6 +318,11 @@ export const ChatProvider = ({ children }) => {
       // badging not supported
     }
   }, [totalUnread]);
+
+  const archivedUnread = useMemo(
+    () => conversations.reduce((sum, c) => sum + (c.archived && !c.muted ? c.unreadCount || 0 : 0), 0),
+    [conversations]
+  );
 
   const value = useMemo(() => ({
     conversations,
@@ -293,9 +339,12 @@ export const ChatProvider = ({ children }) => {
     markRead,
     togglePin,
     toggleMute,
+    toggleArchive,
+    setBlocked,
+    archivedUnread,
     clearChat
   }), [conversations, loaded, typing, removal, totalUnread, refresh, otherParticipant, conversationInfo,
-    upsertConversation, patchConversation, setActiveConversation, markRead, togglePin, toggleMute, clearChat]);
+    upsertConversation, patchConversation, setActiveConversation, markRead, togglePin, toggleMute, toggleArchive, setBlocked, archivedUnread, clearChat]);
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
 };

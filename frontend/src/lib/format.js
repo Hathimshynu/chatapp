@@ -35,7 +35,7 @@ export const formatDayLabel = (date) => {
 };
 
 export const formatLastSeen = (date) => {
-  if (!date) return 'offline';
+  if (!date) return ''; // hidden by privacy settings or never online
   const ago = daysAgo(date);
   const time = formatTime(date);
   if (ago <= 0) return `last seen today at ${time}`;
@@ -125,7 +125,7 @@ const messageBody = (message, mine) => {
     case 'file': return message.media?.name || 'Document';
     case 'sticker': return 'Sticker';
     case 'call': {
-      const kind = message.call?.type === 'video' ? 'video' : 'voice';
+      const kind = `${message.call?.group ? 'group ' : ''}${message.call?.type === 'video' ? 'video' : 'voice'}`;
       const missed = !mine && message.call?.status !== 'completed';
       return missed ? `Missed ${kind} call` : `${kind[0].toUpperCase()}${kind.slice(1)} call`;
     }

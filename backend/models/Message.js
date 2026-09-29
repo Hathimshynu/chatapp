@@ -32,6 +32,10 @@ const callSchema = new mongoose.Schema(
       default: "completed",
     },
     duration: { type: Number, default: 0 },
+    // Group calls: flagged, how many people took part, and who (for per-person "missed").
+    group: { type: Boolean, default: undefined },
+    participants: { type: Number, default: undefined },
+    joined: { type: [mongoose.Schema.Types.ObjectId], default: undefined },
   },
   { _id: false },
 );

@@ -1,8 +1,10 @@
 const express = require('express');
+const { serverError } = require('../utils/http');
 const PushSubscription = require('../models/PushSubscription');
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 const { publicKey } = require('../services/push');
+const { rateLimit, LIMITS } = require('../utils/rateLimit');
 
 const router = express.Router();
 router.use(protect);
@@ -20,7 +22,7 @@ router.get('/config', async (req, res) => {
 });
 
 // @POST /api/push/subscribe  { subscription } — user id always comes from the token
-router.post('/subscribe', async (req, res) => {
+router.post('/subscribe', rateLimit(LIMITS.pushSubscribe), async (req, res) => {
   try {
     if (!publicKey()) return res.status(503).json({ message: 'Push notifications are not configured on the server' });
     const { subscription } = req.body;
@@ -32,7 +34,7 @@ router.post('/subscribe', async (req, res) => {
     );
     res.status(201).json({ subscribed: true });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 });
 

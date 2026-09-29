@@ -19,7 +19,7 @@
   --border-strong: rgba(15, 23, 42, 0.14);
   --text: #0f172a;
   --text-2: #4b5468;
-  --text-3: #8a92a6;
+  --text-3: #626a7e; /* ≥4.5:1 on every light surface (WCAG AA) */
 
   --online: #22c55e;
   --success: #16a34a;
@@ -67,7 +67,7 @@
   --border-strong: rgba(255, 255, 255, 0.13);
   --text: #e9ecf6;
   --text-2: #a4abc0;
-  --text-3: #6d7690;
+  --text-3: #8790a8; /* ≥4.5:1 on every dark surface (WCAG AA) */
 
   --danger-soft: rgba(239, 68, 68, 0.16);
   --tick-read: #38bdf8;
@@ -331,3 +331,16 @@ button.avatar { cursor: pointer; }
 }
 
 .inline-icon { display: inline-block; vertical-align: -3px; }
+
+/* ─── Connection indicator ────────────────────────────────── */
+.connection-banner-slot { position: fixed; z-index: 950; left: 50%; transform: translateX(-50%); top: calc(10px + var(--safe-top)); pointer-events: none; max-width: calc(100vw - 32px); }
+.connection-banner {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px;
+  font-size: 13.5px; font-weight: 600; color: #fff; background: #334155;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25); animation: fade 0.2s ease;
+}
+.connection-banner.is-offline { background: #b45309; }
+.connection-banner span { overflow: hidden; text-overflow: ellipsis; }
+.spin { animation: spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+.dialog:focus, .dialog:focus-visible { outline: none; } /* the container takes focus only to move keyboard focus inside */

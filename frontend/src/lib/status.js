@@ -29,15 +29,16 @@ export const privacyLabel = (privacy) => {
   return 'My contacts';
 };
 
-// Last privacy choice is remembered on this device (like WhatsApp's setting).
-const PRIVACY_KEY = 'chatStatusPrivacy';
-export const loadPrivacy = () => {
+// Last privacy choice is remembered on this device (like WhatsApp's setting),
+// separately for each signed-in account.
+const privacyKey = (userId) => `chatStatusPrivacy:${userId}`;
+export const loadPrivacy = (userId) => {
   try {
-    const saved = JSON.parse(localStorage.getItem(PRIVACY_KEY) || 'null');
+    const saved = JSON.parse(localStorage.getItem(privacyKey(userId)) || 'null');
     if (saved && ['contacts', 'except', 'only'].includes(saved.mode) && Array.isArray(saved.users)) return saved;
   } catch { /* ignore */ }
   return { mode: 'contacts', users: [] };
 };
-export const savePrivacy = (privacy) => {
-  try { localStorage.setItem(PRIVACY_KEY, JSON.stringify(privacy)); } catch { /* ignore */ }
+export const savePrivacy = (userId, privacy) => {
+  try { localStorage.setItem(privacyKey(userId), JSON.stringify(privacy)); } catch { /* ignore */ }
 };

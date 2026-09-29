@@ -1,10 +1,13 @@
 const express = require('express');
+const { serverError } = require('../utils/http');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 const { escapeRegex } = require('../utils/realtime');
 const { scopeFor } = require('../controllers/messageController');
+const { rateLimit, LIMITS } = require('../utils/rateLimit');
+const { viewerContext, maskUser } = require('../utils/privacy');
 
 const router = express.Router();
 router.use(protect);
@@ -13,7 +16,7 @@ const publicAvatar = (avatar) => (avatar && !avatar.startsWith('data:') ? avatar
 
 // @GET /api/search?q=…  → { users, groups, messages }
 // The query is always regex-escaped, so input like "(", "[", "*" or "\" is literal.
-router.get('/', async (req, res) => {
+router.get('/', rateLimit(LIMITS.search), async (req, res) => {
   try {
     const q = String(req.query.q || '').trim().slice(0, 50);
     if (!q) return res.json({ users: [], groups: [], messages: [] });
@@ -26,7 +29,7 @@ router.get('/', async (req, res) => {
       .lean();
 
     const users = await User.find({ _id: { $ne: me }, $or: [{ name: pattern }, { email: pattern }] })
-      .select('name email avatar status lastSeen')
+      .select('name email avatar status lastSeen privacy')
       .limit(10)
       .lean();
 
@@ -60,13 +63,14 @@ router.get('/', async (req, res) => {
       .limit(30)
       .lean() : [];
 
+    const ctx = await viewerContext(me);
     res.json({
-      users: users.map(u => ({ ...u, avatar: u.avatar })),
+      users: users.map(u => maskUser(u, ctx)),
       groups,
       messages
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 });
 

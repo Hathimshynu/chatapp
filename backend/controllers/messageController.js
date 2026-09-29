@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { serverError } = require('../utils/http');
 const Message = require('../models/Message');
 const Conversation = require('../models/Conversation');
 const User = require('../models/User');
@@ -15,7 +16,10 @@ const {
   visibleSinceFilter,
   isVisibleTo
 } = require('../services/messages');
-const { populateConversation, shapeConversation, can } = require('../services/groups');
+const { populateConversation, shapeConversation, shapeForViewer, can } = require('../services/groups');
+const {
+  viewerContext, isBlockedEitherWay, hiddenReadersForConversation, maskReads, maskUser
+} = require('../utils/privacy');
 
 const SENDABLE_TYPES = ['text', 'image', 'video', 'audio', 'file', 'sticker'];
 const MAX_TEXT_LENGTH = 5000;
@@ -57,9 +61,10 @@ const getConversations = async (req, res) => {
     ]) : [];
     const countMap = new Map(counts.map(c => [String(c._id), c.count]));
 
-    res.json(conversations.map(c => shapeConversation(c, userId, countMap.get(String(c._id)) || 0)));
+    const ctx = await viewerContext(userId);
+    res.json(conversations.map(c => shapeConversation(c, userId, countMap.get(String(c._id)) || 0, ctx)));
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -71,7 +76,7 @@ const getUnreadCount = async (req, res) => {
     const total = scope.length ? await Message.countDocuments({ $or: scope, ...unreadFilter(req.user._id) }) : 0;
     res.json({ total });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -95,12 +100,13 @@ const getMessages = async (req, res) => {
       .populate(MESSAGE_POPULATE)
       .lean();
 
+    const hidden = await hiddenReadersForConversation(conversation, req.user._id);
     res.json({
-      messages: messages.reverse().map(serializeMessage),
+      messages: messages.reverse().map(m => maskReads(serializeMessage(m), req.user._id, hidden)),
       hasMore: messages.length === limit
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -125,12 +131,23 @@ const getSharedMedia = async (req, res) => {
       .lean();
     res.json(media);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
 const isAllowedMediaUrl = (url) =>
   typeof url === 'string' && (url.startsWith('/api/media/') || /^https:\/\//i.test(url));
+
+// Blocked direct chats. The blocker is told to unblock; the blocked person gets
+// a neutral message that doesn't reveal the block.
+const blockedResponse = async (res, me, otherId) => {
+  const Block = require('../models/Block');
+  const iBlocked = await Block.exists({ blocker: me, blocked: otherId });
+  return res.status(403).json({
+    message: iBlocked ? 'You blocked this contact. Unblock them to send a message.' : 'Message could not be delivered.',
+    code: iBlocked ? 'BLOCKED_BY_YOU' : 'NOT_DELIVERED'
+  });
+};
 
 // @POST /api/messages/send
 const sendMessage = async (req, res) => {
@@ -172,6 +189,10 @@ const sendMessage = async (req, res) => {
       if (conversation.isGroup && !can(conversation, req.user._id, 'sendMessages')) {
         return res.status(403).json({ message: 'Only admins can send messages to this group' });
       }
+      if (!conversation.isGroup) {
+        const otherId = conversation.participants.find(id => !idsEqual(id, req.user._id));
+        if (otherId && await isBlockedEitherWay(req.user._id, otherId)) return blockedResponse(res, req.user._id, otherId);
+      }
     } else {
       if (!receiverId || !isValidId(receiverId)) {
         return res.status(400).json({ message: 'Receiver is required' });
@@ -182,6 +203,7 @@ const sendMessage = async (req, res) => {
       if (!(await User.exists({ _id: receiverId }))) {
         return res.status(404).json({ message: 'User not found' });
       }
+      if (await isBlockedEitherWay(req.user._id, receiverId)) return blockedResponse(res, req.user._id, receiverId);
       ({ conversation, created } = await findOrCreateDirectConversation(req.user._id, receiverId));
     }
 
@@ -207,7 +229,7 @@ const sendMessage = async (req, res) => {
 
     const payload = { message, conversationId: conversation._id };
     if (created) {
-      payload.conversation = shapeConversation(
+      payload.conversation = await shapeForViewer(
         await populateConversation(Conversation.findById(conversation._id)).lean(),
         req.user._id
       );
@@ -215,7 +237,7 @@ const sendMessage = async (req, res) => {
     res.status(201).json(payload);
   } catch (error) {
     console.error('sendMessage error:', error);
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -264,7 +286,9 @@ const markConversationRead = async (req, res) => {
       if (!bySender.has(key)) bySender.set(key, []);
       bySender.get(key).push(String(message._id));
     }
+    const hiddenForSender = await hiddenReadersForConversation(conversation, req.user._id);
     for (const [senderId, messageIds] of bySender) {
+      if (hiddenForSender) break; // read receipts are off between these two people
       emitToUsers([senderId], 'messages:seen', {
         conversationId: String(conversation._id),
         messageIds,
@@ -273,7 +297,7 @@ const markConversationRead = async (req, res) => {
     }
     res.json({ updated: unseen.length });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -344,9 +368,9 @@ const editMessage = async (req, res) => {
     message.text = text;
     message.edited = true;
     await message.save();
-    res.json(await broadcastMessageUpdate(conversation, message._id));
+    res.json(await broadcastMessageUpdate(conversation, message._id, req.user._id));
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -376,9 +400,9 @@ const deleteMessage = async (req, res) => {
     message.audio = '';
     message.reactions = [];
     await message.save();
-    res.json(await broadcastMessageUpdate(conversation, message._id));
+    res.json(await broadcastMessageUpdate(conversation, message._id, req.user._id));
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -397,9 +421,9 @@ const reactToMessage = async (req, res) => {
       message.reactions.push({ user: req.user._id, emoji });
     }
     await message.save();
-    res.json(await broadcastMessageUpdate(conversation, message._id));
+    res.json(await broadcastMessageUpdate(conversation, message._id, req.user._id));
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -412,20 +436,22 @@ const getMessageInfo = async (req, res) => {
     if (!idsEqual(message.sender, req.user._id)) return res.status(403).json({ message: 'Only the sender can view message info' });
 
     const recipientIds = conversation.participants.filter(id => !idsEqual(id, req.user._id));
-    const users = await User.find({ _id: { $in: recipientIds } }).select('name avatar').lean();
+    const users = await User.find({ _id: { $in: recipientIds } }).select('name avatar privacy').lean();
+    const hidden = await hiddenReadersForConversation(conversation, req.user._id);
+    const ctx = await viewerContext(req.user._id);
     const at = (userId, kind) => message.receipts?.find(r => idsEqual(r.user, userId) && r.kind === kind)?.at || null;
     const recipients = users.map(user => {
-      const read = message.seen.some(id => idsEqual(id, user._id));
+      const read = !hidden?.has(String(user._id)) && message.seen.some(id => idsEqual(id, user._id));
       const delivered = read || message.deliveredTo.some(id => idsEqual(id, user._id));
       return {
-        user: { _id: user._id, name: user.name, avatar: user.avatar?.startsWith('data:') ? '' : user.avatar },
+        user: (({ _id, name, avatar }) => ({ _id, name, avatar: avatar?.startsWith('data:') ? '' : avatar }))(maskUser(user, ctx)),
         deliveredAt: delivered ? (at(user._id, 'delivered') || at(user._id, 'read') || true) : null,
         readAt: read ? (at(user._id, 'read') || true) : null
       };
     });
     res.json({ messageId: message._id, sentAt: message.createdAt, recipients });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -435,9 +461,10 @@ const getSingleMessage = async (req, res) => {
     const context = await loadOwnedContext(req, res);
     if (!context) return;
     await context.message.populate(MESSAGE_POPULATE);
-    res.json(serializeMessage(context.message));
+    const hidden = await hiddenReadersForConversation(context.conversation, req.user._id);
+    res.json(maskReads(serializeMessage(context.message), req.user._id, hidden));
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -463,7 +490,7 @@ const clearConversation = async (req, res) => {
     emitToUsers([req.user._id], 'conversation:cleared', { conversationId: String(conversation._id) });
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -479,9 +506,11 @@ const toggleMembership = (field) => async (req, res) => {
       enabled ? { $addToSet: { [field]: req.user._id } } : { $pull: { [field]: req.user._id } },
       { timestamps: false }
     );
+    const flag = { pinnedBy: 'pinned', mutedBy: 'muted', archivedBy: 'archived' }[field];
+    emitToUsers([req.user._id], 'conversation:updated', { conversationId: String(conversation._id), [flag]: enabled });
     res.json({ value: enabled });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -497,7 +526,7 @@ const getCallHistory = async (req, res) => {
     })
       .sort({ createdAt: -1 })
       .limit(80)
-      .populate({ path: 'conversationId', select: 'participants', populate: { path: 'participants', select: 'name' } })
+      .populate({ path: 'conversationId', select: 'participants isGroup name avatar', populate: { path: 'participants', select: 'name' } })
       .lean();
 
     res.json(calls.map(call => {
@@ -510,12 +539,16 @@ const getCallHistory = async (req, res) => {
         status: call.call?.status || 'completed',
         duration: call.call?.duration || 0,
         direction: outgoing ? 'outgoing' : 'incoming',
-        peer: peer ? { _id: peer._id, name: peer.name } : null,
+        peer: !call.conversationId?.isGroup && peer ? { _id: peer._id, name: peer.name } : null,
+        group: call.conversationId?.isGroup ? { _id: call.conversationId._id, name: call.conversationId.name, avatar: call.conversationId.avatar || '' } : null,
+        participants: call.call?.participants || undefined,
+        // Group calls are "missed" per person: did I join?
+        joined: call.call?.group ? (call.call.joined || []).some(id => idsEqual(id, userId)) : undefined,
         createdAt: call.createdAt
       };
     }));
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -536,5 +569,6 @@ module.exports = {
   clearConversation,
   togglePin: toggleMembership('pinnedBy'),
   toggleMute: toggleMembership('mutedBy'),
+  toggleArchive: toggleMembership('archivedBy'),
   getCallHistory
 };

@@ -1,13 +1,14 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import {
-  ArrowDown, ArrowLeft, Bell, BellOff, Eraser, EllipsisVertical, Info, Lock, Phone, Pin, PinOff, Upload, Video
+  Archive, ArchiveRestore, ArrowDown, ArrowLeft, Ban, Bell, BellOff, Eraser, EllipsisVertical, Info, Lock, Phone, Pin, PinOff, Upload, Video
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { useSocket, useSocketEvent } from '../../context/SocketContext';
 import { useCall } from '../../context/CallContext';
+import { useGroupCall } from '../../context/GroupCallContext';
 import Avatar from '../common/Avatar';
 import Menu from '../common/Menu';
 import Dialog from '../common/Dialog';
@@ -17,13 +18,15 @@ import Composer from './Composer';
 import MediaViewer from './MediaViewer';
 import ForwardDialog from './ForwardDialog';
 import ContactPanel from './ContactPanel';
-import GroupInfoPanel from './GroupInfoPanel';
-import MessageInfoDialog from './MessageInfoDialog';
 import { useBackClose } from '../../lib/backStack';
 import { errorMessage, uploadMedia } from '../../lib/api';
 import { formatDayLabel, formatLastSeen, isSameDay, systemText, typingLabel } from '../../lib/format';
 import { attachmentKind, compressImage, readVideoMeta } from '../../lib/media';
 import { playSentSound } from '../../lib/sounds';
+
+// Rarely opened panels load on demand.
+const GroupInfoPanel = lazy(() => import('./GroupInfoPanel'));
+const MessageInfoDialog = lazy(() => import('./MessageInfoDialog'));
 
 const PAGE_SIZE = 40;
 const GROUP_WINDOW_MS = 3 * 60 * 1000;
@@ -43,6 +46,9 @@ const reconcile = (list, incoming) => {
 
 const mergeLists = (current, fresh) => fresh.reduce(reconcile, current).sort(byTime);
 
+// Worth retrying automatically once we're back online (no response, server error or rate limit).
+const isRetryable = (error) => !error?.response || error.response.status >= 500 || error.response.status === 429;
+
 const SENDER_COLORS = ['#6366f1', '#0ea5e9', '#ec4899', '#f59e0b', '#10b981', '#f43f5e', '#8b5cf6', '#14b8a6', '#f97316', '#3b82f6'];
 const senderColor = (id = '') => SENDER_COLORS[[...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % SENDER_COLORS.length];
 
@@ -60,6 +66,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   const chat = useChat();
   const { socket, isOnline, lastSeen } = useSocket();
   const { startCall } = useCall();
+  const groupCalls = useGroupCall();
   const myId = String(user._id);
   const other = chat.otherParticipant(conversation);
   const convId = String(conversation._id);
@@ -69,6 +76,9 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   const people = useMemo(() => new Map((conversation.participants || []).map(p => [String(p._id), p])), [conversation.participants]);
   // Group "send messages: admins only" → members get a read-only composer.
   const canSend = !isGroup || conversation.settings?.sendMessages !== 'admins' || conversation.myRole === 'admin';
+  const blocked = !isGroup && !!conversation.blockedByMe;
+  const activeGroupCall = isGroup ? groupCalls?.activeCalls[convId] : null;
+  const inThisGroupCall = !!activeGroupCall && groupCalls?.groupCall?.callId === activeGroupCall.callId;
 
   const [messages, setMessages] = useState([]);
   const [hasMore, setHasMore] = useState(false);
@@ -87,6 +97,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   const [highlightId, setHighlightId] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [infoFor, setInfoFor] = useState(null);
+  const [confirmBlock, setConfirmBlock] = useState(false);
 
   const listRef = useRef(null);
   const composerRef = useRef(null);
@@ -97,6 +108,8 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   const isTempRef = useRef(isTemp);
   const creatingRef = useRef(null);
   const retryBodies = useRef(new Map());
+  const messagesRef = useRef([]);
+  const retrying = useRef(new Set());
   const readTimer = useRef(null);
 
   // Refs only move forward from temp → real (a stale render must not undo it).
@@ -358,8 +371,11 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
       setMessages(prev => reconcile(prev, data.message));
       playSentSound();
     } catch (error) {
-      patchLocal(clientId, { status: 'failed' });
-      toast.error(errorMessage(error, 'Message not sent'));
+      const autoRetry = isRetryable(error);
+      patchLocal(clientId, { status: 'failed', autoRetry });
+      if (!autoRetry || navigator.onLine) toast.error(errorMessage(error, 'Message not sent'));
+    } finally {
+      retrying.current.delete(clientId);
     }
   }, [postMessage]);
 
@@ -472,6 +488,28 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
       });
   };
 
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // Back online → resend messages that failed because of the connection, in order.
+  const retryFailed = useCallback(() => {
+    messagesRef.current
+      .filter(m => m.status === 'failed' && m.autoRetry && retryBodies.current.has(m.clientId) && !retrying.current.has(m.clientId))
+      .forEach(m => {
+        retrying.current.add(m.clientId);
+        patchLocal(m.clientId, { status: 'pending' });
+        deliver(m.clientId, retryBodies.current.get(m.clientId));
+      });
+  }, [deliver]);
+
+  useEffect(() => {
+    window.addEventListener('online', retryFailed);
+    socket?.on('connect', retryFailed);
+    return () => {
+      window.removeEventListener('online', retryFailed);
+      socket?.off('connect', retryFailed);
+    };
+  }, [socket, retryFailed]);
+
   const retry = useCallback((message) => {
     const body = retryBodies.current.get(message.clientId);
     if (!body) {
@@ -532,7 +570,12 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
 
   const openMenu = useCallback((message, point) => setMenu({ message, ...point }), []);
   const startReply = useCallback((message) => { setEditing(null); setReplyTo(message); }, []);
-  const callBack = useCallback((type) => { if (other) startCall(other, type); }, [startCall, other]);
+  const callBack = useCallback((type) => {
+    if (isGroup) {
+      if (groupCalls.activeCalls[convIdRef.current]) groupCalls.joinGroupCall(convIdRef.current);
+      else groupCalls.startGroupCall(conversation, type);
+    } else if (other) startCall(other, type);
+  }, [startCall, other, isGroup, groupCalls, conversation]);
 
   const onTyping = useCallback((type) => {
     if (!isTempRef.current) socket?.emit('typing', { conversationId: convIdRef.current, type });
@@ -594,7 +637,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
       : onlineOthers.join(' and ');
     statusLine = `${members.length} members${onlineOthers.length ? ` · ${names} online` : ''}`;
   } else if (online) statusLine = 'online';
-  else statusLine = formatLastSeen(lastSeen[other._id] || other.lastSeen);
+  else statusLine = formatLastSeen(other._id in lastSeen ? lastSeen[other._id] : other.lastSeen);
 
   return (
     <div
@@ -616,6 +659,27 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
             </span>
           </button>
           <div className="chat-header-actions">
+            {isGroup && !isTemp && groupCalls && (activeGroupCall ? (
+              <button
+                type="button"
+                className="join-call-pill"
+                onClick={() => groupCalls.joinGroupCall(convId)}
+                aria-label={inThisGroupCall ? 'Return to call' : `Join ${activeGroupCall.type === 'video' ? 'video' : 'voice'} call, ${activeGroupCall.participants.length} in call`}
+              >
+                {activeGroupCall.type === 'video' ? <Video size={16} /> : <Phone size={16} />}
+                {inThisGroupCall ? 'Return' : 'Join'}
+                <span className="join-call-count" aria-hidden="true">{activeGroupCall.participants.length}</span>
+              </button>
+            ) : (
+              <>
+                <button type="button" className="icon-btn" onClick={() => groupCalls.startGroupCall(conversation, 'video')} aria-label="Group video call" title="Group video call">
+                  <Video size={22} />
+                </button>
+                <button type="button" className="icon-btn" onClick={() => groupCalls.startGroupCall(conversation, 'audio')} aria-label="Group voice call" title="Group voice call">
+                  <Phone size={20} />
+                </button>
+              </>
+            ))}
             {!isGroup && (
               <>
                 <button type="button" className="icon-btn" onClick={() => startCall(other, 'video')} aria-label="Video call" title="Video call">
@@ -632,6 +696,8 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
                 { icon: Info, label: isGroup ? 'Group info' : 'Contact info', onClick: () => setShowInfo(true) },
                 !isTemp && { icon: conversation.muted ? Bell : BellOff, label: conversation.muted ? 'Unmute notifications' : 'Mute notifications', onClick: () => chat.toggleMute(conversation) },
                 !isTemp && { icon: conversation.pinned ? PinOff : Pin, label: conversation.pinned ? 'Unpin chat' : 'Pin chat', onClick: () => chat.togglePin(conversation) },
+                !isTemp && { icon: conversation.archived ? ArchiveRestore : Archive, label: conversation.archived ? 'Unarchive chat' : 'Archive chat', onClick: () => chat.toggleArchive(conversation) },
+                !isGroup && { icon: Ban, label: blocked ? 'Unblock' : 'Block', onClick: () => (blocked ? chat.setBlocked(other._id, false) : setConfirmBlock(true)), danger: !blocked },
                 !isTemp && { icon: Eraser, label: 'Clear chat', onClick: () => setConfirmClear(true), danger: true }
               ]}
             />
@@ -701,7 +767,13 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
           </button>
         )}
 
-        {!canSend ? (
+        {blocked ? (
+          <div className="composer composer-locked blocked-bar">
+            <Ban size={16} />
+            <span>You blocked {other.name}.</span>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => chat.setBlocked(other._id, false)}>Unblock</button>
+          </div>
+        ) : !canSend ? (
           <div className="composer composer-locked">
             <Lock size={16} /> Only admins can send messages to this group
           </div>
@@ -735,12 +807,14 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
       </div>
 
       {showInfo && isGroup && (
-        <GroupInfoPanel
-          conversation={conversation}
-          onClose={() => setShowInfo(false)}
-          onOpenMedia={setViewer}
-          onMessageUser={(person) => { setShowInfo(false); onOpenUser?.(person); }}
-        />
+        <Suspense fallback={<aside className="contact-panel" aria-busy="true" />}>
+          <GroupInfoPanel
+            conversation={conversation}
+            onClose={() => setShowInfo(false)}
+            onOpenMedia={setViewer}
+            onMessageUser={(person) => { setShowInfo(false); onOpenUser?.(person); }}
+          />
+        </Suspense>
       )}
       {showInfo && !isGroup && (
         <ContactPanel
@@ -751,7 +825,9 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
           onOpenMedia={setViewer}
           onToggleMute={() => chat.toggleMute(conversation)}
           onTogglePin={() => chat.togglePin(conversation)}
+          onToggleArchive={() => chat.toggleArchive(conversation)}
           onClear={() => setConfirmClear(true)}
+          onToggleBlock={() => (blocked ? chat.setBlocked(other._id, false) : setConfirmBlock(true))}
         />
       )}
 
@@ -769,7 +845,29 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
           onInfo={(message) => setInfoFor(message._id)}
         />
       )}
-      {infoFor && <MessageInfoDialog messageId={infoFor} onClose={() => setInfoFor(null)} />}
+      {infoFor && <Suspense fallback={null}><MessageInfoDialog messageId={infoFor} onClose={() => setInfoFor(null)} /></Suspense>}
+
+      {confirmBlock && (
+        <Dialog title={`Block ${other.name}?`} onClose={() => setConfirmBlock(false)}>
+          <p className="dialog-text">
+            Blocked contacts can&apos;t call you or send you messages, and won&apos;t see your online status, last seen,
+            profile photo or status updates. Your chat history stays, and {other.name} isn&apos;t notified.
+          </p>
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="btn btn-danger btn-block"
+              onClick={async () => {
+                setConfirmBlock(false);
+                if (await chat.setBlocked(other._id, true)) toast.success(`${other.name} blocked`);
+              }}
+            >
+              Block
+            </button>
+            <button type="button" className="btn btn-ghost btn-block" onClick={() => setConfirmBlock(false)}>Cancel</button>
+          </div>
+        </Dialog>
+      )}
 
       {deleteTarget && (
         <Dialog title="Delete message?" onClose={() => setDeleteTarget(null)}>

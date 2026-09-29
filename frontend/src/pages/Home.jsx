@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useChat } from '../context/ChatContext';
 import Sidebar from '../components/sidebar/Sidebar';
 import ChatWindow from '../components/chat/ChatWindow';
+import ConnectionBanner from '../components/common/ConnectionBanner';
 import { OPEN_CONVERSATION_EVENT, useInstallPrompt } from '../lib/pwa';
 import toast from 'react-hot-toast';
 import { useBackClose } from '../lib/backStack';
@@ -122,6 +123,7 @@ export default function Home() {
 
   return (
     <div className={`app-shell${current ? ' chat-open' : ''}`}>
+      <ConnectionBanner />
       <Sidebar
         view={view}
         onViewChange={setView}

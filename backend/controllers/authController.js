@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const { serverError } = require('../utils/http');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
@@ -61,7 +62,7 @@ const register = async (req, res) => {
         message: `${duplicateField || 'name or email'} already in use`
       });
     }
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 
@@ -97,7 +98,7 @@ const login = async (req, res) => {
 
   } catch (error) {
     console.error('Login error:', error.message);
-    res.status(500).json({ message: error.message });
+    serverError(res, error);
   }
 };
 

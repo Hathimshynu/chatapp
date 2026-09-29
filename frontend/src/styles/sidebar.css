@@ -35,7 +35,8 @@
 .nav-avatar { margin-top: 6px; }
 
 /* ─── Panels ──────────────────────────────────────────────── */
-.sidebar-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* min-height: 0 lets the inner .panel-scroll scroll instead of the panel growing past the screen (phones: column layout). */
+.sidebar-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .panel-header {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
@@ -153,3 +154,23 @@
   .conv-item { width: calc(100% - 8px); margin: 0 4px; border-radius: 16px; }
 }
 @keyframes slide-in { from { transform: translateX(24px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+
+/* ─── Archived chats ──────────────────────────────────────── */
+.panel-title-row { display: flex; align-items: center; gap: 6px; }
+.panel-title-row .icon-btn { margin-left: -8px; }
+.archived-row .conv-name { font-weight: 600; }
+.archived-icon {
+  width: 52px; height: 52px; flex-shrink: 0; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--brand); background: var(--brand-soft, var(--surface-2));
+}
+.archived-count { font-size: 13px; font-weight: 600; color: var(--text-3); }
+.archived-hint { margin: 4px 20px 10px; font-size: 13px; line-height: 1.45; color: var(--text-3); text-align: center; }
+
+/* ─── Privacy settings ────────────────────────────────────── */
+.settings-row-chevron { margin-left: auto; color: var(--text-3); flex-shrink: 0; }
+.dialog-note { font-size: 13px; color: var(--text-3); }
+.blocked-list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.blocked-list li { display: flex; align-items: center; gap: 12px; padding: 8px 4px; }
+.blocked-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.blocked-list .btn { color: var(--brand); font-weight: 700; }

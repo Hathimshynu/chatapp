@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Bell, Eraser, Mail, Phone, Pin, Play, Video, X } from 'lucide-react';
+import { Archive, Ban, Bell, Eraser, Mail, Phone, Pin, Play, Video, X } from 'lucide-react';
 import { useSocket } from '../../context/SocketContext';
 import Avatar from '../common/Avatar';
 import { mediaUrl } from '../../lib/api';
@@ -16,7 +16,9 @@ function Toggle({ checked, onChange, label, icon: Icon }) {
   );
 }
 
-export default function ContactPanel({ conversation, other, onClose, onCall, onOpenMedia, onTogglePin, onToggleMute, onClear }) {
+export default function ContactPanel({
+  conversation, other, onClose, onCall, onOpenMedia, onTogglePin, onToggleMute, onToggleArchive, onClear, onToggleBlock
+}) {
   const { isOnline, lastSeen } = useSocket();
   const [profile, setProfile] = useState(null);
   const [media, setMedia] = useState([]);
@@ -33,6 +35,7 @@ export default function ContactPanel({ conversation, other, onClose, onCall, onO
 
   const person = { ...other, ...profile };
   const online = isOnline(other._id);
+  const blocked = !!conversation.blockedByMe;
 
   return (
     <aside className="contact-panel" aria-label="Contact info">
@@ -44,10 +47,10 @@ export default function ContactPanel({ conversation, other, onClose, onCall, onO
         <div className="contact-hero">
           <Avatar user={person} size={132} ring />
           <h3>{person.name}</h3>
-          <p className={online ? 'is-online' : ''}>{online ? 'online' : formatLastSeen(lastSeen[other._id] || person.lastSeen)}</p>
+          <p className={online ? 'is-online' : ''}>{online ? 'online' : formatLastSeen(other._id in lastSeen ? lastSeen[other._id] : person.lastSeen)}</p>
           <div className="contact-actions">
-            <button type="button" onClick={() => onCall('audio')}><Phone size={20} /><span>Voice</span></button>
-            <button type="button" onClick={() => onCall('video')}><Video size={20} /><span>Video</span></button>
+            <button type="button" onClick={() => onCall('audio')} disabled={blocked}><Phone size={20} /><span>Voice</span></button>
+            <button type="button" onClick={() => onCall('video')} disabled={blocked}><Video size={20} /><span>Video</span></button>
           </div>
         </div>
 
@@ -76,12 +79,20 @@ export default function ContactPanel({ conversation, other, onClose, onCall, onO
           <section className="contact-card is-list">
             <Toggle icon={Bell} label="Mute notifications" checked={!!conversation.muted} onChange={onToggleMute} />
             <Toggle icon={Pin} label="Pin chat" checked={!!conversation.pinned} onChange={onTogglePin} />
+            <Toggle icon={Archive} label="Archive chat" checked={!!conversation.archived} onChange={onToggleArchive} />
             <button type="button" className="settings-row is-danger" onClick={onClear}>
               <span className="settings-row-icon"><Eraser size={18} /></span>
               <span className="settings-row-text">Clear chat</span>
             </button>
           </section>
         )}
+
+        <section className="contact-card is-list">
+          <button type="button" className="settings-row is-danger" onClick={onToggleBlock}>
+            <span className="settings-row-icon"><Ban size={18} /></span>
+            <span className="settings-row-text">{blocked ? `Unblock ${person.name}` : `Block ${person.name}`}</span>
+          </button>
+        </section>
       </div>
     </aside>
   );

@@ -476,3 +476,13 @@
 @media (hover: hover) and (pointer: fine) {
   .composer-field .composer-camera { display: none; }
 }
+
+/* ─── Blocked contact / group call join pill ──────────────── */
+.blocked-bar { flex-wrap: wrap; padding: 8px 16px; text-align: center; }
+.blocked-bar .btn { color: var(--brand); font-weight: 700; }
+.join-call-pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px 0 14px; margin-right: 4px;
+  border-radius: 999px; font-size: 14px; font-weight: 700; color: #fff;
+  background: linear-gradient(135deg, #34d399, #16a34a); box-shadow: 0 6px 18px rgba(22, 163, 74, 0.35);
+}
+.join-call-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; font-size: 12px; line-height: 20px; text-align: center; background: rgba(255, 255, 255, 0.25); }

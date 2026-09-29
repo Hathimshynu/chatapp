@@ -15,9 +15,11 @@ const {
   clearConversation,
   togglePin,
   toggleMute,
+  toggleArchive,
   getCallHistory
 } = require('../controllers/messageController');
 const { protect } = require('../middleware/auth');
+const { rateLimit, LIMITS } = require('../utils/rateLimit');
 
 router.use(protect);
 
@@ -25,12 +27,13 @@ router.use(protect);
 router.get('/conversations', getConversations);
 router.get('/unread-count', getUnreadCount);
 router.get('/calls/history', getCallHistory);
-router.post('/send', sendMessage);
+router.post('/send', rateLimit(LIMITS.send), sendMessage);
 router.get('/single/:messageId', getSingleMessage);
 
 router.post('/conversation/:conversationId/clear', clearConversation);
 router.post('/conversation/:conversationId/pin', togglePin);
 router.post('/conversation/:conversationId/mute', toggleMute);
+router.post('/conversation/:conversationId/archive', toggleArchive);
 
 router.patch('/:messageId', editMessage);
 router.delete('/:messageId', deleteMessage);

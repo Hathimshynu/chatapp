@@ -32,6 +32,16 @@ const corsOptions = {
 };
 
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
+// Baseline security headers for API responses.
+app.use((req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer'
+  });
+  next();
+});
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ limit: '5mb', extended: true }));
@@ -55,9 +65,16 @@ app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   if (err.type === 'entity.too.large') return res.status(413).json({ message: 'File is too large (max 15 MB)' });
   if (err.type === 'entity.parse.failed') return res.status(400).json({ message: 'Invalid request body' });
+  if (err.message === 'CORS origin is not allowed') return res.status(403).json({ message: 'Origin not allowed' });
+  // Known client errors keep their status; anything else is a generic 500 (details only in the log).
+  const status = err.status || err.statusCode;
+  if (status >= 400 && status < 500) return res.status(status).json({ message: err.expose ? err.message : 'Invalid request' });
   console.error(err);
-  res.status(err.status || 500).json({ message: err.message || 'Server error' });
+  res.status(500).json({ message: 'Something went wrong. Please try again.' });
 });
+
+// Unknown API routes → JSON 404 (not an HTML page).
+app.use('/api', (req, res) => res.status(404).json({ message: 'Not found' }));
 
 initSocket(server, allowedOrigins);
 

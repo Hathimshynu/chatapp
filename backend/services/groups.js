@@ -1,5 +1,6 @@
 const Conversation = require('../models/Conversation');
 const { idsEqual, serializeMessage, PARTICIPANT_FIELDS } = require('./messages');
+const { maskUser, hiddenReadersFor, maskReads, viewerContext } = require('../utils/privacy');
 
 const MAX_GROUP_MEMBERS = 256;
 const PERMISSIONS = ['editInfo', 'sendMessages', 'addMembers'];
@@ -39,19 +40,28 @@ const populateConversation = (query) => query
     populate: [{ path: 'sender', select: 'name' }, { path: 'system.actor', select: 'name' }, { path: 'system.targets', select: 'name' }]
   });
 
-// Per-user view of a conversation (pinned/muted/unread/role are personal).
-const shapeConversation = (conversation, userId, unreadCount = 0) => {
+// Per-user view of a conversation (pinned/muted/archived/unread/role are personal).
+// `ctx` (utils/privacy viewerContext) masks other people's profile fields and
+// hides read receipts where privacy requires it.
+const shapeConversation = (conversation, userId, unreadCount = 0, ctx = null) => {
   const lastMessage = conversation.lastMessage;
   const hiddenForMe = lastMessage?.deletedFor?.some(id => idsEqual(id, userId));
+  const hiddenReaders = hiddenReadersFor(conversation, userId);
+  const other = !conversation.isGroup && (conversation.participants || []).find(p => !idsEqual(p._id || p, userId));
   const shaped = {
     ...conversation,
-    lastMessage: lastMessage && !hiddenForMe ? serializeMessage(lastMessage) : null,
+    participants: ctx ? (conversation.participants || []).map(p => maskUser(p, ctx)) : conversation.participants,
+    lastMessage: lastMessage && !hiddenForMe ? maskReads(serializeMessage(lastMessage), userId, hiddenReaders) : null,
     pinned: (conversation.pinnedBy || []).some(id => idsEqual(id, userId)),
     muted: (conversation.mutedBy || []).some(id => idsEqual(id, userId)),
+    archived: (conversation.archivedBy || []).some(id => idsEqual(id, userId)),
     pinnedBy: undefined,
     mutedBy: undefined,
+    archivedBy: undefined,
     unreadCount
   };
+  // Only *my* blocks are revealed ("You blocked this contact"), never theirs.
+  if (other && ctx) shaped.blockedByMe = ctx.iBlocked.has(String(other._id || other));
   if (conversation.isGroup) {
     shaped.myRole = findMember(conversation, userId)?.role || null;
     // Invite links are visible to admins only.
@@ -64,8 +74,15 @@ const shapeConversation = (conversation, userId, unreadCount = 0) => {
 const groupPayload = (conversation) => {
   const plain = typeof conversation.toObject === 'function' ? conversation.toObject() : { ...conversation };
   const { _id, isGroup, name, description, avatar, createdBy, members, settings, participants, createdAt } = plain;
-  return { _id, isGroup, name, description, avatar, createdBy, members, settings, participants, createdAt };
+  // Profiles are masked per viewer, so the broadcast carries ids only; each client
+  // refetches GET /api/groups/:id for its own masked view of the members.
+  const participantIds = (participants || []).map(p => String(p._id || p));
+  return { _id, isGroup, name, description, avatar, createdBy, members, settings, participantIds, createdAt };
 };
+
+// Shape one conversation for a viewer, loading their privacy context.
+const shapeForViewer = async (conversation, viewerId, unreadCount = 0) =>
+  shapeConversation(conversation, viewerId, unreadCount, await viewerContext(viewerId));
 
 module.exports = {
   MAX_GROUP_MEMBERS,
@@ -77,5 +94,6 @@ module.exports = {
   invalidateMembership,
   populateConversation,
   shapeConversation,
+  shapeForViewer,
   groupPayload
 };

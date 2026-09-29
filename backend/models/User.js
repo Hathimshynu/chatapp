@@ -39,6 +39,16 @@ const userSchema = new mongoose.Schema({
   pushPreview: {
     type: Boolean,
     default: true
+  },
+  // Who can see what. "contacts" = people you have a direct chat with.
+  // Enforced server-side in utils/privacy.js.
+  privacy: {
+    lastSeen: { type: String, enum: ['everyone', 'contacts', 'nobody'], default: 'everyone' },
+    online: { type: String, enum: ['everyone', 'contacts', 'nobody'], default: 'everyone' },
+    profilePhoto: { type: String, enum: ['everyone', 'contacts', 'nobody'], default: 'everyone' },
+    about: { type: String, enum: ['everyone', 'contacts', 'nobody'], default: 'everyone' },
+    // Off = others don't see your blue ticks in direct chats, and you don't see theirs.
+    readReceipts: { type: Boolean, default: true }
   }
 }, { timestamps: true });
 

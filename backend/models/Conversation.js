@@ -38,7 +38,9 @@ const conversationSchema = new mongoose.Schema({
   inviteCode: { type: String, default: undefined },
 
   pinnedBy: [{ type: ObjectId, ref: 'User' }],
-  mutedBy: [{ type: ObjectId, ref: 'User' }]
+  mutedBy: [{ type: ObjectId, ref: 'User' }],
+  // Per-user archive (same pattern as pinnedBy/mutedBy — never affects other members).
+  archivedBy: [{ type: ObjectId, ref: 'User' }]
 }, { timestamps: true });
 
 conversationSchema.index({ participants: 1, updatedAt: -1 });

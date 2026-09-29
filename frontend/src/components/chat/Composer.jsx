@@ -15,7 +15,8 @@ const TYPING_REPEAT_MS = 2500;
 const TYPING_IDLE_MS = 3000;
 const isTouchDevice = () => window.matchMedia('(pointer: coarse)').matches;
 
-const draftKey = (key) => `chatDraft:${key}`;
+// Scoped to the signed-in account so two accounts on one device never see each other's drafts.
+const draftKey = (myId, key) => `chatDraft:${myId}:${key}`;
 
 function RecorderBar({ startedAt, levels, onCancel, onSend }) {
   const [now, setNow] = useState(() => Date.now());
@@ -45,7 +46,7 @@ const Composer = forwardRef(function Composer({
   onSendText, onSubmitEdit, onSendFiles, onSendSticker, onSendVoice, onTyping, onStopTyping
 }, ref) {
   const [text, setText] = useState(() => {
-    try { return localStorage.getItem(draftKey(draftId)) || ''; } catch { return ''; }
+    try { return localStorage.getItem(draftKey(myId, draftId)) || ''; } catch { return ''; }
   });
   const [panel, setPanel] = useState(null); // 'emoji' | 'sticker' | 'attach'
   const [pendingFiles, setPendingFiles] = useState(null);
@@ -63,12 +64,12 @@ const Composer = forwardRef(function Composer({
     if (editing) return;
     const timer = setTimeout(() => {
       try {
-        if (text.trim()) localStorage.setItem(draftKey(draftId), text);
-        else localStorage.removeItem(draftKey(draftId));
+        if (text.trim()) localStorage.setItem(draftKey(myId, draftId), text);
+        else localStorage.removeItem(draftKey(myId, draftId));
       } catch { /* storage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [text, draftId, editing]);
+  }, [text, myId, draftId, editing]);
 
   // Editing a message pre-fills the box; cancelling restores nothing.
   useEffect(() => {

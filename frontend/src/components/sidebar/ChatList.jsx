@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import { Download, Search, SquarePen, Users, X } from 'lucide-react';
+import { Archive, ArrowLeft, Download, Search, SquarePen, Users, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { useSocket } from '../../context/SocketContext';
@@ -8,7 +8,9 @@ import { useInstallPrompt } from '../../lib/pwa';
 import { formatListTime, messagePreview } from '../../lib/format';
 import Avatar from '../common/Avatar';
 import ConversationItem from './ConversationItem';
-import NewGroupDialog from './NewGroupDialog';
+import { useBackClose } from '../../lib/backStack';
+
+const NewGroupDialog = lazy(() => import('./NewGroupDialog'));
 
 const FILTERS = [
   { id: 'all', label: 'All' },
@@ -30,13 +32,15 @@ function Highlight({ text, query }) {
 
 export default function ChatList({ activeConversationId, onOpenConversation, onOpenUser }) {
   const { user } = useAuth();
-  const { conversations, loaded, typing, otherParticipant } = useChat();
+  const { conversations, loaded, typing, otherParticipant, archivedUnread } = useChat();
   const { isOnline, connected } = useSocket();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
   const [results, setResults] = useState(EMPTY_RESULTS);
   const [searching, setSearching] = useState(false);
   const [newGroup, setNewGroup] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  useBackClose(showArchived, () => setShowArchived(false));
   const searchRef = useRef(null);
   const install = useInstallPrompt();
   const [installDismissed, setInstallDismissed] = useState(() => {
@@ -74,20 +78,23 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
   })), [conversations, otherParticipant]);
 
   const visible = useMemo(() => rows.filter(({ conversation, other, title }) => {
-    if (trimmed && !`${title} ${other?.email || ''}`.toLowerCase().includes(trimmed)) return false;
+    if (trimmed) return `${title} ${other?.email || ''}`.toLowerCase().includes(trimmed); // search covers archived too
+    if (showArchived) return !!conversation.archived;
+    if (conversation.archived) return false;
     if (filter === 'unread') return conversation.unreadCount > 0;
     if (filter === 'groups') return conversation.isGroup;
     if (filter === 'online') return !conversation.isGroup && isOnline(other?._id);
     if (filter === 'pinned') return conversation.pinned;
     return true;
-  }), [rows, trimmed, filter, isOnline]);
+  }), [rows, trimmed, filter, isOnline, showArchived]);
+  const archivedCount = rows.filter(r => r.conversation.archived).length;
 
   const byId = useMemo(() => new Map(rows.map(r => [String(r.conversation._id), r])), [rows]);
   const knownPeople = useMemo(() => new Set(rows.filter(r => r.other).map(r => String(r.other._id))), [rows]);
   const shownIds = new Set(visible.map(r => String(r.conversation._id)));
   const newPeople = results.users.filter(p => !knownPeople.has(String(p._id)));
   const extraGroups = results.groups.filter(g => !shownIds.has(String(g._id)) && byId.has(String(g._id)));
-  const unreadChats = rows.filter(r => r.conversation.unreadCount > 0).length;
+  const unreadChats = rows.filter(r => r.conversation.unreadCount > 0 && !r.conversation.archived).length;
   const nothingFound = !searching && !visible.length && !newPeople.length && !extraGroups.length && !results.messages.length;
 
   const dismissInstall = () => {
@@ -105,8 +112,11 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
   return (
     <div className="panel">
       <header className="panel-header">
-        <div>
-          <h1>Chats</h1>
+        <div className="panel-title-row">
+          {showArchived && (
+            <button type="button" className="icon-btn" onClick={() => setShowArchived(false)} aria-label="Back to chats"><ArrowLeft size={22} /></button>
+          )}
+          <h1>{showArchived ? 'Archived' : 'Chats'}</h1>
           {!connected && <p className="panel-subtitle is-connecting">Connecting…</p>}
         </div>
         <div className="panel-actions">
@@ -152,7 +162,7 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
         )}
       </div>
 
-      {!trimmed && (
+      {!trimmed && !showArchived && (
         <div className="chips" role="tablist">
           {FILTERS.map(f => (
             <button
@@ -179,6 +189,21 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
           </div>
         ) : (
           <>
+            {!trimmed && !showArchived && filter === 'all' && archivedCount > 0 && (
+              <button type="button" className="conv-item archived-row" onClick={() => setShowArchived(true)}>
+                <span className="archived-icon"><Archive size={20} /></span>
+                <span className="conv-body">
+                  <span className="conv-row">
+                    <span className="conv-name">Archived</span>
+                    {archivedUnread > 0 && <span className="badge" aria-label={`${archivedUnread} unread`}>{archivedUnread}</span>}
+                  </span>
+                </span>
+                <span className="archived-count">{archivedCount}</span>
+              </button>
+            )}
+            {showArchived && !trimmed && (
+              <p className="archived-hint">Archived chats stay here when new messages arrive. Open a chat's menu to unarchive it.</p>
+            )}
             {trimmed && visible.length > 0 && <div className="list-section">Chats</div>}
             {visible.map(({ conversation, other }) => (
               <ConversationItem
@@ -247,7 +272,14 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
               </>
             )}
 
-            {!trimmed && visible.length === 0 && (
+            {!trimmed && showArchived && visible.length === 0 && (
+              <div className="empty-state">
+                <div className="empty-icon"><Archive size={28} /></div>
+                <h3>No archived chats</h3>
+                <p>Archive a chat from its menu to tidy up your list.</p>
+              </div>
+            )}
+            {!trimmed && !showArchived && visible.length === 0 && (
               <div className="empty-state">
                 <div className="empty-icon">{filter === 'groups' ? <Users size={28} /> : <SquarePen size={28} />}</div>
                 <h3>{filter === 'all' ? 'No chats yet' : `No ${filter === 'groups' ? 'groups' : `${filter} chats`}`}</h3>
@@ -265,10 +297,12 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
       </div>
 
       {newGroup && (
-        <NewGroupDialog
-          onClose={() => setNewGroup(false)}
-          onCreated={(conversation) => { setNewGroup(false); onOpenConversation(conversation); }}
-        />
+        <Suspense fallback={null}>
+          <NewGroupDialog
+            onClose={() => setNewGroup(false)}
+            onCreated={(conversation) => { setNewGroup(false); onOpenConversation(conversation); }}
+          />
+        </Suspense>
       )}
     </div>
   );

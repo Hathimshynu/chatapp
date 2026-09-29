@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { serverError } = require('../utils/http');
 const Status = require('../models/Status');
 const StatusView = require('../models/StatusView');
 const Conversation = require('../models/Conversation');
@@ -6,7 +7,8 @@ const Media = require('../models/Media');
 const User = require('../models/User');
 const { emitToUsers } = require('../utils/realtime');
 const { idsEqual, findOrCreateDirectConversation, createAndBroadcastMessage } = require('../services/messages');
-const { populateConversation, shapeConversation } = require('../services/groups');
+const { populateConversation, shapeForViewer } = require('../services/groups');
+const { blockedWith, viewerContext, maskUser } = require('../utils/privacy');
 
 const BACKGROUNDS = ['violet', 'ocean', 'sunset', 'forest', 'rose', 'night', 'amber', 'slate'];
 const REACTIONS = ['❤️', '😂', '😮', '😢', '👏', '🔥'];
@@ -23,10 +25,12 @@ const contactsOf = async (userId) => {
   return new Set(ids.map(String).filter(id => id !== String(userId)));
 };
 
-// Server-side visibility rule. `ownerContacts` is the owner's contact set.
-const canView = (status, viewerId, ownerContacts) => {
+// Server-side visibility rule. `ownerContacts` is the owner's contact set and
+// `ownerBlocks` everyone with a block relation to the owner (either direction).
+const canView = (status, viewerId, ownerContacts, ownerBlocks = new Set()) => {
   if (idsEqual(status.user, viewerId)) return true;
   if (status.expiresAt <= new Date()) return false;
+  if (ownerBlocks.has(String(viewerId))) return false;
   if (!ownerContacts.has(String(viewerId))) return false;
   const listed = (status.visibility?.users || []).some(id => idsEqual(id, viewerId));
   if (status.visibility?.mode === 'except') return !listed;
@@ -35,8 +39,8 @@ const canView = (status, viewerId, ownerContacts) => {
 };
 
 const audienceOf = async (status) => {
-  const contacts = await contactsOf(status.user);
-  return [...contacts].filter(id => canView(status, id, contacts));
+  const [contacts, blocks] = await Promise.all([contactsOf(status.user), blockedWith(status.user)]);
+  return [...contacts].filter(id => canView(status, id, contacts, blocks.any));
 };
 
 // Fields other users may see (never the owner's visibility list).
@@ -61,28 +65,29 @@ const loadVisible = async (req, res) => {
   const status = await Status.findOne({ _id: req.params.id, ...notExpired() }).lean();
   if (!status) return notFound();
   if (!idsEqual(status.user, req.user._id)) {
-    const ownerContacts = await contactsOf(status.user);
-    if (!canView(status, req.user._id, ownerContacts)) return notFound();
+    const [ownerContacts, ownerBlocks] = await Promise.all([contactsOf(status.user), blockedWith(status.user)]);
+    if (!canView(status, req.user._id, ownerContacts, ownerBlocks.any)) return notFound();
   }
   return status;
 };
 
 const fail = (res, error) => {
   console.error('status error:', error);
-  res.status(500).json({ message: error.message });
+  serverError(res, error);
 };
 
 // @GET /api/status/feed — my statuses + contacts' visible statuses, grouped by person
 const getFeed = async (req, res) => {
   try {
     const me = req.user._id;
-    const contacts = await contactsOf(me);
+    const [contacts, ctx] = await Promise.all([contactsOf(me), viewerContext(me)]);
     const [mine, theirs] = await Promise.all([
       Status.find({ user: me, ...notExpired() }).sort({ createdAt: 1 }).lean(),
       Status.find({ user: { $in: [...contacts] }, ...notExpired() }).sort({ createdAt: 1 }).lean()
     ]);
     // Each owner's contacts include me (symmetric), so only the mode rules remain.
-    const visible = theirs.filter(s => canView(s, me, new Set([String(me)])));
+    // Blocks are symmetric too: ctx.blocked covers both directions.
+    const visible = theirs.filter(s => canView(s, me, new Set([String(me)]), ctx.blocked.has(String(s.user)) ? new Set([String(me)]) : new Set()));
 
     const [myViews, viewCounts, owners] = await Promise.all([
       StatusView.find({ viewer: me, status: { $in: visible.map(s => s._id) } }).select('status').lean(),
@@ -90,7 +95,7 @@ const getFeed = async (req, res) => {
         { $match: { status: { $in: mine.map(s => s._id) } } },
         { $group: { _id: '$status', count: { $sum: 1 } } }
       ]),
-      User.find({ _id: { $in: [...new Set(visible.map(s => String(s.user)))] } }).select('name avatar').lean()
+      User.find({ _id: { $in: [...new Set(visible.map(s => String(s.user)))] } }).select('name avatar privacy').lean()
     ]);
     const viewed = new Set(myViews.map(v => String(v.status)));
     const counts = new Map(viewCounts.map(c => [String(c._id), c.count]));
@@ -104,7 +109,7 @@ const getFeed = async (req, res) => {
     const updates = owners.map(owner => {
       const statuses = byUser.get(String(owner._id)) || [];
       return {
-        user: { _id: owner._id, name: owner.name, avatar: publicAvatar(owner.avatar) },
+        user: { _id: owner._id, name: owner.name, avatar: publicAvatar(maskUser(owner, ctx).avatar) },
         statuses,
         lastAt: statuses.at(-1)?.createdAt,
         allViewed: statuses.every(s => s.viewed)
@@ -244,9 +249,10 @@ const getViewers = async (req, res) => {
     if (!isValidId(req.params.id)) return res.status(404).json({ message: 'Status not found' });
     const status = await Status.findOne({ _id: req.params.id, user: req.user._id }).select('_id').lean();
     if (!status) return res.status(404).json({ message: 'Status not found' });
-    const views = await StatusView.find({ status: status._id }).sort({ viewedAt: -1 }).populate('viewer', 'name avatar').lean();
+    const views = await StatusView.find({ status: status._id }).sort({ viewedAt: -1 }).populate('viewer', 'name avatar privacy').lean();
+    const ctx = await viewerContext(req.user._id);
     res.json(views.filter(v => v.viewer).map(v => ({
-      user: { _id: v.viewer._id, name: v.viewer.name, avatar: publicAvatar(v.viewer.avatar) },
+      user: { _id: v.viewer._id, name: v.viewer.name, avatar: publicAvatar(maskUser(v.viewer, ctx).avatar) },
       viewedAt: v.viewedAt,
       reaction: v.reaction
     })));
@@ -277,7 +283,7 @@ const sendStatusMessage = async (req, res, status, text) => {
     }
   });
   const payload = { message, conversationId: conversation._id };
-  if (created) payload.conversation = shapeConversation(await populateConversation(Conversation.findById(conversation._id)).lean(), me);
+  if (created) payload.conversation = await shapeForViewer(await populateConversation(Conversation.findById(conversation._id)).lean(), me);
   return res.status(201).json(payload);
 };
 

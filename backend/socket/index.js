@@ -1,8 +1,12 @@
 const { Server } = require('socket.io');
 const User = require('../models/User');
 const { userFromToken } = require('../middleware/auth');
-const { setIo, isOnline, onlineUserIds, userRoom } = require('../utils/realtime');
+const { setIo, isOnline, userRoom } = require('../utils/realtime');
+const { broadcastPresence, visibleOnlineFor } = require('../services/presence');
+const { blockedWith } = require('../utils/privacy');
+const { allowSocketEvent } = require('../utils/rateLimit');
 const { registerCallHandlers, endCallsForUser } = require('./calls');
+const { registerGroupCallHandlers, leaveAllGroupCalls } = require('./groupCalls');
 const { markPendingDelivered } = require('../controllers/messageController');
 const { participantsOf } = require('../services/groups');
 const mongoose = require('mongoose');
@@ -42,10 +46,11 @@ const initSocket = (server, allowedOrigins) => {
     clearTimeout(callDropTimers.get(userId));
     callDropTimers.delete(userId);
 
-    socket.emit('presence:list', onlineUserIds());
+    // Only the online users this person is allowed to see (privacy + blocks).
+    visibleOnlineFor(userId).then(ids => socket.emit('presence:list', ids)).catch(() => socket.emit('presence:list', []));
     if (cameOnline) {
-      socket.broadcast.emit('presence', { userId, online: true });
       User.updateOne({ _id: userId }, { isOnline: true }).catch(() => {});
+      broadcastPresence(userId, { online: true }).catch(error => console.error('presence:', error.message));
     }
     markPendingDelivered(userId).catch(error => console.error('markPendingDelivered:', error.message));
 
@@ -56,11 +61,13 @@ const initSocket = (server, allowedOrigins) => {
       if (!mongoose.isValidObjectId(conversationId)) return;
       const members = await participantsOf(conversationId);
       if (!members?.has(userId)) return;
-      const rooms = [...members].filter(id => id !== userId).map(userRoom);
+      const { any: blocked } = await blockedWith(userId);
+      const rooms = [...members].filter(id => id !== userId && !blocked.has(id)).map(userRoom);
       if (rooms.length) io.to(rooms).emit(event, { conversationId: String(conversationId), userId, ...extra });
     };
 
     socket.on('typing', ({ conversationId, type } = {}) => {
+      if (!allowSocketEvent('typing', socket.id, 40, 10 * 1000)) return;
       relayTyping('typing', conversationId, { type: type === 'recording' ? 'recording' : 'typing' }).catch(() => {});
     });
 
@@ -69,6 +76,7 @@ const initSocket = (server, allowedOrigins) => {
     });
 
     registerCallHandlers(io, socket);
+    registerGroupCallHandlers(io, socket);
 
     socket.on('disconnect', () => {
       if (isOnline(userId)) return; // another tab/device is still connected
@@ -77,13 +85,17 @@ const initSocket = (server, allowedOrigins) => {
         offlineTimers.delete(userId);
         if (isOnline(userId)) return;
         const lastSeen = new Date();
-        User.updateOne({ _id: userId }, { isOnline: false, lastSeen }).catch(() => {});
-        io.emit('presence', { userId, online: false, lastSeen });
+        User.updateOne({ _id: userId }, { isOnline: false, lastSeen })
+          .then(() => broadcastPresence(userId, { online: false, lastSeen }))
+          .catch(error => console.error('presence:', error.message));
       }, OFFLINE_GRACE_MS));
 
       callDropTimers.set(userId, setTimeout(() => {
         callDropTimers.delete(userId);
-        if (!isOnline(userId)) endCallsForUser(userId);
+        if (!isOnline(userId)) {
+          endCallsForUser(userId);
+          leaveAllGroupCalls(userId);
+        }
       }, CALL_DROP_GRACE_MS));
     });
   });

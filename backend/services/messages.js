@@ -16,7 +16,8 @@ const MESSAGE_POPULATE = [
   { path: 'system.targets', select: 'name' }
 ];
 
-const PARTICIPANT_FIELDS = 'name email avatar status lastSeen';
+// privacy is loaded so utils/privacy can mask per viewer; maskUser strips it from output.
+const PARTICIPANT_FIELDS = 'name email avatar status lastSeen privacy';
 
 const idsEqual = (a, b) => String(a) === String(b);
 
@@ -115,13 +116,22 @@ const createAndBroadcastMessage = async ({ conversation, senderId, fields, creat
   return populated;
 };
 
-const broadcastMessageUpdate = async (conversation, messageId) => {
+// `viewerId` gets the returned copy; in direct chats each person gets a copy with
+// read receipts masked according to their privacy settings.
+const broadcastMessageUpdate = async (conversation, messageId, viewerId = null) => {
   const updated = serializeMessage(await loadMessage(messageId));
-  emitToUsers(conversation.participants, 'message:updated', {
-    message: updated,
-    conversationId: String(conversation._id)
-  });
-  return updated;
+  const conversationId = String(conversation._id);
+  if (conversation.isGroup) {
+    emitToUsers(conversation.participants, 'message:updated', { message: updated, conversationId });
+    return updated;
+  }
+  const { hiddenReadersFor, maskReads } = require('../utils/privacy');
+  const people = await User.find({ _id: { $in: conversation.participants } }).select('privacy').lean();
+  const view = (userId) => maskReads(updated, userId, hiddenReadersFor({ isGroup: false, participants: people }, userId));
+  for (const userId of conversation.participants) {
+    emitToUsers([userId], 'message:updated', { message: view(userId), conversationId });
+  }
+  return viewerId ? view(viewerId) : updated;
 };
 
 // ── Group system messages ("Alice added Bob") ─────────────────────

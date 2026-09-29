@@ -5,14 +5,16 @@ const webpush = require('web-push');
 const PushSubscription = require('../models/PushSubscription');
 const User = require('../models/User');
 const { isOnline } = require('../utils/realtime');
+const { blockedWith } = require('../utils/privacy');
 
 let initialized = false;
+let invalidConfig = false; // bad keys: log once, then stay disabled
 
 const isConfigured = () => !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
 
 const init = () => {
   if (initialized) return true;
-  if (!isConfigured()) return false;
+  if (invalidConfig || !isConfigured()) return false;
   try {
     webpush.setVapidDetails(
       process.env.VAPID_SUBJECT || 'mailto:admin@example.com',
@@ -21,6 +23,7 @@ const init = () => {
     );
     initialized = true;
   } catch (error) {
+    invalidConfig = true;
     console.error('Web Push disabled — invalid VAPID configuration:', error.message);
   }
   return initialized;
@@ -64,9 +67,11 @@ const notifyNewMessage = async (conversation, message, senderId) => {
   if (!init()) return;
   try {
     const muted = new Set((conversation.mutedBy || []).map(String));
+    // No pushes between blocked users (either direction), even in groups.
+    const { any: blocked } = await blockedWith(senderId);
     const recipients = conversation.participants
       .map(String)
-      .filter(id => id !== String(senderId) && !muted.has(id) && !isOnline(id));
+      .filter(id => id !== String(senderId) && !muted.has(id) && !blocked.has(id) && !isOnline(id));
     if (!recipients.length) return;
 
     const [subscriptions, users] = await Promise.all([

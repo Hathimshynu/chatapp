@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const { emitToUsers, isOnline, userRoom } = require('../utils/realtime');
+const Block = require('../models/Block');
+const { allowSocketEvent } = require('../utils/rateLimit');
 const { findOrCreateDirectConversation, createAndBroadcastMessage } = require('../services/messages');
 
 const RING_TIMEOUT_MS = 45 * 1000;
@@ -79,19 +81,27 @@ const registerCallHandlers = (io, socket) => {
       receiverId = String(receiverId || '');
       const callType = type === 'video' ? 'video' : 'audio';
       if (!mongoose.isValidObjectId(receiverId) || receiverId === me) return reply({ error: 'Invalid user' });
-      if (callByUser.has(me)) return reply({ error: 'You are already on a call' });
+      // Lazy require: groupCalls also requires this module.
+      const { isInGroupCall } = require('./groupCalls');
+      if (callByUser.has(me) || isInGroupCall(me)) return reply({ error: 'You are already on a call' });
 
       const [caller, receiver] = await Promise.all([
         User.findById(me).select('name avatar').lean(),
         User.findById(receiverId).select('name avatar').lean()
       ]);
       if (!caller || !receiver) return reply({ error: 'User not found' });
+      if (!allowSocketEvent('call-start', me, 10, 60 * 1000)) return reply({ error: 'Too many calls. Please wait a minute.' });
+      // Blocked in either direction: no call. Only the blocker is told why.
+      const block = await Block.findOne({ $or: [{ blocker: me, blocked: receiverId }, { blocker: receiverId, blocked: me }] }).lean();
+      if (block) {
+        return reply({ error: String(block.blocker) === me ? 'You blocked this contact. Unblock them to call.' : 'Call could not be connected', reason: 'blocked' });
+      }
 
       if (!isOnline(receiverId)) {
         logCall({ callerId: me, receiverId, type: callType, status: 'missed' });
         return reply({ error: `${receiver.name} is offline right now`, reason: 'offline' });
       }
-      if (callByUser.has(receiverId)) {
+      if (callByUser.has(receiverId) || isInGroupCall(receiverId)) {
         logCall({ callerId: me, receiverId, type: callType, status: 'busy' });
         return reply({ error: `${receiver.name} is on another call`, reason: 'busy' });
       }
@@ -150,4 +160,6 @@ const registerCallHandlers = (io, socket) => {
   });
 };
 
-module.exports = { registerCallHandlers, getCallByChannel, endCallsForUser };
+const isInDirectCall = (userId) => callByUser.has(String(userId));
+
+module.exports = { registerCallHandlers, getCallByChannel, endCallsForUser, isInDirectCall };

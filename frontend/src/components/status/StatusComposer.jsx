@@ -7,6 +7,7 @@ import VisibilityDialog from './VisibilityDialog';
 import { useBackClose } from '../../lib/backStack';
 import { errorMessage, MAX_UPLOAD_BYTES, uploadMedia } from '../../lib/api';
 import { compressImage, readVideoMeta } from '../../lib/media';
+import { useAuth } from '../../context/AuthContext';
 import { loadPrivacy, privacyLabel, savePrivacy, STATUS_BACKGROUNDS, STATUS_FONTS } from '../../lib/status';
 
 const EmojiPanel = lazy(() => import('../chat/EmojiPanel'));
@@ -25,7 +26,8 @@ export default function StatusComposer({ mode, file, onClose, onPosted }) {
   const [font, setFont] = useState('sans');
   const [align, setAlign] = useState('center');
   const [caption, setCaption] = useState('');
-  const [privacy, setPrivacy] = useState(loadPrivacy);
+  const { user } = useAuth();
+  const [privacy, setPrivacy] = useState(() => loadPrivacy(user._id));
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [progress, setProgress] = useState(null);
@@ -70,7 +72,7 @@ export default function StatusComposer({ mode, file, onClose, onPosted }) {
         body = { type: isVideo ? 'video' : 'image', media: { url: uploaded.url, ...meta }, caption: caption.trim(), visibility };
       }
       await axios.post('/api/status', body);
-      savePrivacy(privacy);
+      savePrivacy(user._id, privacy);
       toast.success('Status posted');
       onPosted?.();
       onClose();

@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { serverError } = require('../utils/http');
 const mongoose = require('mongoose');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
@@ -7,8 +8,10 @@ const { emitToUsers } = require('../utils/realtime');
 const { idsEqual, createSystemMessage, PARTICIPANT_FIELDS } = require('../services/messages');
 const {
   MAX_GROUP_MEMBERS, PERMISSIONS, findMember, isAdmin, can,
-  invalidateMembership, populateConversation, shapeConversation, groupPayload
+  invalidateMembership, populateConversation, shapeForViewer, groupPayload
 } = require('../services/groups');
+// Lazy: socket/groupCalls pulls in the socket layer.
+const groupCalls = () => require('../socket/groupCalls');
 
 const NAME_MAX = 60;
 const DESCRIPTION_MAX = 500;
@@ -56,12 +59,12 @@ const broadcastGroup = async (conversationId, event = {}) => {
 
 const respondWithGroup = async (res, conversationId, userId, status = 200) => {
   const group = await populateConversation(Conversation.findById(conversationId)).lean();
-  res.status(status).json(shapeConversation(group, userId));
+  res.status(status).json(await shapeForViewer(group, userId));
 };
 
 const fail = (res, error) => {
   console.error('group error:', error);
-  res.status(500).json({ message: error.message });
+  serverError(res, error);
 };
 
 // @POST /api/groups  { name, description?, avatar?, memberIds[] }
@@ -214,8 +217,11 @@ const detachMember = async (group, userId) => {
   group.participants = group.participants.filter(id => !idsEqual(id, userId));
   group.pinnedBy = (group.pinnedBy || []).filter(id => !idsEqual(id, userId));
   group.mutedBy = (group.mutedBy || []).filter(id => !idsEqual(id, userId));
+  group.archivedBy = (group.archivedBy || []).filter(id => !idsEqual(id, userId));
   await group.save();
   invalidateMembership(group._id);
+  // A removed/leaving member is dropped from any live group call.
+  groupCalls().removeUserFromGroupCall(group._id, userId);
   return { promoted, empty: remaining.length === 0 };
 };
 
@@ -272,6 +278,7 @@ const leaveGroup = async (req, res) => {
     const { promoted, empty } = await detachMember(group, me);
     emitToUsers([me], 'group:removed', { conversationId: String(group._id), reason: 'left' });
     if (empty) {
+      await groupCalls().endGroupCallForConversation(group._id, 'deleted');
       await Message.deleteMany({ conversationId: group._id });
       await Conversation.deleteOne({ _id: group._id });
       return res.json({ left: true, deleted: true });
@@ -292,6 +299,7 @@ const deleteGroup = async (req, res) => {
     if (!group) return;
     if (!isAdmin(group, req.user._id)) return res.status(403).json({ message: 'Only admins can delete the group' });
     const participants = group.participants.map(String);
+    await groupCalls().endGroupCallForConversation(group._id, 'deleted');
     await Message.deleteMany({ conversationId: group._id });
     await Conversation.deleteOne({ _id: group._id });
     invalidateMembership(group._id);

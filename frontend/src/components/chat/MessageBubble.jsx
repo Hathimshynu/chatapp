@@ -50,13 +50,16 @@ function StatusQuote({ statusRef, mine, ownerName }) {
   );
 }
 
-function CallLog({ message, mine, onCallBack }) {
-  const { type = 'audio', status, duration } = message.call || {};
-  const missed = !mine && status !== 'completed';
+function CallLog({ message, mine, myId, onCallBack }) {
+  const { type = 'audio', status, duration, group, participants, joined } = message.call || {};
+  // Group calls are missed per person (I never joined), not by overall status.
+  const iJoined = mine || (joined || []).some(id => String(id) === String(myId));
+  const missed = group ? !iJoined : !mine && status !== 'completed';
   const Icon = type === 'video' ? Video : missed ? PhoneMissed : mine ? PhoneOutgoing : PhoneIncoming;
-  const kind = type === 'video' ? 'Video call' : 'Voice call';
+  const kind = `${group ? 'Group ' : ''}${type === 'video' ? 'video' : 'voice'} call`;
   let detail;
-  if (status === 'completed') detail = formatDuration(duration);
+  if (group) detail = status === 'completed' ? `${participants} joined · ${formatDuration(duration)}` : 'No one joined';
+  else if (status === 'completed') detail = formatDuration(duration);
   else if (mine) detail = status === 'declined' ? 'Declined' : status === 'busy' ? 'Busy' : 'No answer';
   else detail = status === 'declined' ? 'Declined' : 'Tap to call back';
 
@@ -64,7 +67,7 @@ function CallLog({ message, mine, onCallBack }) {
     <button type="button" className={`call-log${missed ? ' is-missed' : ''}`} onClick={(e) => { e.stopPropagation(); onCallBack(type); }}>
       <span className="call-log-icon"><Icon size={20} /></span>
       <span className="call-log-text">
-        <strong>{missed ? `Missed ${type === 'video' ? 'video' : 'voice'} call` : kind}</strong>
+        <strong>{missed ? `Missed ${kind.toLowerCase()}` : kind[0].toUpperCase() + kind.slice(1)}</strong>
         <span>{detail}</span>
       </span>
       <span className="call-log-action">{type === 'video' ? <Video size={18} /> : <Phone size={18} />}</span>
@@ -167,7 +170,7 @@ function MessageBubble({
       </p>
     );
   } else if (type === 'call') {
-    content = <CallLog message={message} mine={mine} onCallBack={onCallBack} />;
+    content = <CallLog message={message} mine={mine} myId={myId} onCallBack={onCallBack} />;
   } else if (isSticker && media) {
     content = <img className="sticker" src={mediaUrl(media.url)} alt="Sticker" loading="lazy" onLoad={onMediaLoad} draggable="false" />;
   } else if (isVisual) {

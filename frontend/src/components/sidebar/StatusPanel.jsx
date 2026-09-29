@@ -1,12 +1,14 @@
-import { useRef, useState } from 'react';
+import { lazy, Suspense, useRef, useState } from 'react';
 import { Camera, CircleFadingPlus, Pencil, Plus } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useStatus } from '../../context/StatusContext';
 import Avatar from '../common/Avatar';
 import StatusRing from '../status/StatusRing';
-import StatusComposer from '../status/StatusComposer';
-import StatusViewer from '../status/StatusViewer';
 import { formatDayLabel, formatTime } from '../../lib/format';
+
+// Opened on demand; the composer pulls in the emoji picker.
+const StatusComposer = lazy(() => import('../status/StatusComposer'));
+const StatusViewer = lazy(() => import('../status/StatusViewer'));
 
 const when = (date) => `${formatDayLabel(date)}, ${formatTime(date)}`;
 
@@ -96,6 +98,7 @@ export default function StatusPanel() {
         )}
       </div>
 
+      <Suspense fallback={null}>
       {composer && (
         <StatusComposer mode={composer.mode} file={composer.file} onClose={() => setComposer(null)} onPosted={refresh} />
       )}
@@ -110,6 +113,7 @@ export default function StatusPanel() {
           onClose={() => setViewing(null)}
         />
       )}
+      </Suspense>
     </div>
   );
 }

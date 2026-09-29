@@ -33,7 +33,8 @@ export const SocketProvider = ({ children }) => {
         else next.delete(String(userId));
         return next;
       });
-      if (seenAt) setLastSeen(prev => ({ ...prev, [userId]: seenAt }));
+      // null = hidden by their privacy settings (or a block): don't show a stale value.
+      setLastSeen(prev => ({ ...prev, [userId]: seenAt ?? null }));
     });
 
     // Phones suspend background tabs; reconnect as soon as the app is visible again.

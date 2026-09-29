@@ -10,7 +10,7 @@ const HD_VIDEO = {
 };
 
 // Wideband voice with echo cancellation, noise suppression and auto gain.
-const HD_AUDIO = {
+export const HD_AUDIO = {
   AEC: true,
   ANS: true,
   AGC: true,
@@ -19,7 +19,7 @@ const HD_AUDIO = {
 
 let agoraPromise = null;
 // The SDK is large; load it only when a call actually starts.
-const loadAgora = () => {
+export const loadAgora = () => {
   if (!agoraPromise) {
     agoraPromise = import('agora-rtc-sdk-ng').then(({ default: AgoraRTC }) => {
       AgoraRTC.setLogLevel(3);
@@ -29,7 +29,7 @@ const loadAgora = () => {
   return agoraPromise;
 };
 
-const permissionMessage = (error, type) => {
+export const permissionMessage = (error, type) => {
   const code = error?.code || error?.name || '';
   if (/PERMISSION_DENIED|NotAllowedError/i.test(code) || /permission/i.test(error?.message || '')) {
     return type === 'video'

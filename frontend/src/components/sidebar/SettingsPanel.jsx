@@ -14,6 +14,7 @@ import { notificationPermission, requestNotificationPermission } from '../../lib
 import Avatar from '../common/Avatar';
 import Dialog from '../common/Dialog';
 import PushSettings from './PushSettings';
+import PrivacySettings from './PrivacySettings';
 
 const THEMES = [
   { id: 'system', label: 'System', icon: Monitor },
@@ -188,6 +189,7 @@ export default function SettingsPanel() {
       <div className="panel-scroll settings">
         <ProfileEditor key={user._id} />
         <Accounts />
+        <PrivacySettings key={`privacy-${user._id}`} />
 
         <section className="settings-section">
           <h3>Appearance</h3>

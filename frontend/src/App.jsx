@@ -5,6 +5,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { SocketProvider } from './context/SocketContext';
 import { ChatProvider } from './context/ChatContext';
 import { CallProvider } from './context/CallContext';
+import { GroupCallProvider } from './context/GroupCallContext';
 import { StatusProvider } from './context/StatusContext';
 import { safeNextPath } from './lib/api';
 import Login from './pages/Login';
@@ -20,7 +21,9 @@ function Messenger() {
       <ChatProvider>
         <StatusProvider>
           <CallProvider>
-            <Home />
+            <GroupCallProvider>
+              <Home />
+            </GroupCallProvider>
           </CallProvider>
         </StatusProvider>
       </ChatProvider>
