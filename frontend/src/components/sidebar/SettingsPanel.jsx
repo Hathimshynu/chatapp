@@ -13,6 +13,7 @@ import { compressImage } from '../../lib/media';
 import { notificationPermission, requestNotificationPermission } from '../../lib/notify';
 import Avatar from '../common/Avatar';
 import Dialog from '../common/Dialog';
+import PushSettings from './PushSettings';
 
 const THEMES = [
   { id: 'system', label: 'System', icon: Monitor },
@@ -217,6 +218,7 @@ export default function SettingsPanel() {
               </span>
               {permission === 'default' && <button type="button" className="btn btn-sm btn-primary" onClick={enableNotifications}>Turn on</button>}
             </div>
+            <PushSettings />
           </div>
         </section>
 

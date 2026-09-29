@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { errorMessage } from '../lib/api';
+import { errorMessage, safeNextPath } from '../lib/api';
 import AuthLayout from './AuthLayout';
 
 export default function Login() {
@@ -22,7 +22,7 @@ export default function Login() {
     try {
       const account = await login(email.trim(), password);
       toast.success(`Welcome back, ${account.name.split(' ')[0]}!`);
-      navigate('/', { replace: true });
+      navigate(safeNextPath(params.get('next')), { replace: true });
     } catch (error) {
       toast.error(errorMessage(error, 'Login failed'));
       setLoading(false);
@@ -33,7 +33,7 @@ export default function Login() {
     <AuthLayout
       title="Welcome back"
       subtitle="Sign in to continue to your chats."
-      footer={<>New here? <Link to={adding ? '/register?add=1' : '/register'}>Create an account</Link></>}
+      footer={<>New here? <Link to={adding ? '/register?add=1' : params.get('next') ? `/register?next=${encodeURIComponent(params.get('next'))}` : '/register'}>Create an account</Link></>}
     >
       <form className="auth-form" onSubmit={handleSubmit}>
         <label className="field with-icon">

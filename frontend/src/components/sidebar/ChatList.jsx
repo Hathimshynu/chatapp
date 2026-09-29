@@ -1,21 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import { Download, Search, SquarePen, X } from 'lucide-react';
+import { Download, Search, SquarePen, Users, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { useSocket } from '../../context/SocketContext';
 import { useInstallPrompt } from '../../lib/pwa';
+import { formatListTime, messagePreview } from '../../lib/format';
 import Avatar from '../common/Avatar';
 import ConversationItem from './ConversationItem';
+import NewGroupDialog from './NewGroupDialog';
 
 const FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'unread', label: 'Unread' },
+  { id: 'groups', label: 'Groups' },
   { id: 'online', label: 'Online' },
   { id: 'pinned', label: 'Pinned' }
 ];
 
 const INSTALL_DISMISSED_KEY = 'chatInstallDismissed';
+const EMPTY_RESULTS = { users: [], groups: [], messages: [] };
+
+// Wrap the matched part of a snippet in <mark> (plain string compare — no regex).
+function Highlight({ text, query }) {
+  const index = query ? text.toLowerCase().indexOf(query) : -1;
+  if (index < 0) return text;
+  return <>{text.slice(0, index)}<mark>{text.slice(index, index + query.length)}</mark>{text.slice(index + query.length)}</>;
+}
 
 export default function ChatList({ activeConversationId, onOpenConversation, onOpenUser }) {
   const { user } = useAuth();
@@ -23,8 +34,9 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
   const { isOnline, connected } = useSocket();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
-  const [people, setPeople] = useState([]);
+  const [results, setResults] = useState(EMPTY_RESULTS);
   const [searching, setSearching] = useState(false);
+  const [newGroup, setNewGroup] = useState(false);
   const searchRef = useRef(null);
   const install = useInstallPrompt();
   const [installDismissed, setInstallDismissed] = useState(() => {
@@ -33,10 +45,10 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
 
   const trimmed = query.trim().toLowerCase();
 
-  // Search everyone on ChatApp (debounced).
+  // Server-side search across people, my groups and my messages (debounced).
   useEffect(() => {
     if (!trimmed) {
-      setPeople([]);
+      setResults(EMPTY_RESULTS);
       setSearching(false);
       return;
     }
@@ -44,8 +56,8 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const { data } = await axios.get('/api/users/search', { params: { query: trimmed }, signal: controller.signal });
-        setPeople(data);
+        const { data } = await axios.get('/api/search', { params: { q: trimmed }, signal: controller.signal });
+        setResults(data);
       } catch {
         // aborted or failed — keep previous results
       } finally {
@@ -55,23 +67,39 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
     return () => { clearTimeout(timer); controller.abort(); };
   }, [trimmed]);
 
-  const rows = useMemo(() => conversations.map(c => ({ conversation: c, other: otherParticipant(c) })), [conversations, otherParticipant]);
+  const rows = useMemo(() => conversations.map(c => ({
+    conversation: c,
+    other: otherParticipant(c),
+    title: (c.isGroup ? c.name : otherParticipant(c)?.name) || ''
+  })), [conversations, otherParticipant]);
 
-  const visible = useMemo(() => rows.filter(({ conversation, other }) => {
-    if (trimmed && !`${other?.name || ''} ${other?.email || ''}`.toLowerCase().includes(trimmed)) return false;
+  const visible = useMemo(() => rows.filter(({ conversation, other, title }) => {
+    if (trimmed && !`${title} ${other?.email || ''}`.toLowerCase().includes(trimmed)) return false;
     if (filter === 'unread') return conversation.unreadCount > 0;
-    if (filter === 'online') return isOnline(other?._id);
+    if (filter === 'groups') return conversation.isGroup;
+    if (filter === 'online') return !conversation.isGroup && isOnline(other?._id);
     if (filter === 'pinned') return conversation.pinned;
     return true;
   }), [rows, trimmed, filter, isOnline]);
 
-  const knownIds = useMemo(() => new Set(rows.map(r => String(r.other?._id))), [rows]);
-  const newPeople = people.filter(p => !knownIds.has(String(p._id)));
+  const byId = useMemo(() => new Map(rows.map(r => [String(r.conversation._id), r])), [rows]);
+  const knownPeople = useMemo(() => new Set(rows.filter(r => r.other).map(r => String(r.other._id))), [rows]);
+  const shownIds = new Set(visible.map(r => String(r.conversation._id)));
+  const newPeople = results.users.filter(p => !knownPeople.has(String(p._id)));
+  const extraGroups = results.groups.filter(g => !shownIds.has(String(g._id)) && byId.has(String(g._id)));
   const unreadChats = rows.filter(r => r.conversation.unreadCount > 0).length;
+  const nothingFound = !searching && !visible.length && !newPeople.length && !extraGroups.length && !results.messages.length;
 
   const dismissInstall = () => {
     setInstallDismissed(true);
     try { localStorage.setItem(INSTALL_DISMISSED_KEY, '1'); } catch { /* ignore */ }
+  };
+
+  const openResult = (conversationId, focusMessageId) => {
+    const row = byId.get(String(conversationId));
+    if (!row) return;
+    setQuery('');
+    onOpenConversation(row.conversation, focusMessageId ? { focusMessageId } : undefined);
   };
 
   return (
@@ -82,6 +110,9 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
           {!connected && <p className="panel-subtitle is-connecting">Connecting…</p>}
         </div>
         <div className="panel-actions">
+          <button type="button" className="icon-btn" title="New group" aria-label="New group" onClick={() => setNewGroup(true)}>
+            <Users size={20} />
+          </button>
           <button type="button" className="icon-btn" title="New chat" aria-label="New chat" onClick={() => searchRef.current?.focus()}>
             <SquarePen size={20} />
           </button>
@@ -110,8 +141,8 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
           ref={searchRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search chats or people"
-          aria-label="Search chats or people"
+          placeholder="Search chats, groups, people or messages"
+          aria-label="Search chats, groups, people or messages"
           enterKeyHint="search"
         />
         {query && (
@@ -148,6 +179,7 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
           </div>
         ) : (
           <>
+            {trimmed && visible.length > 0 && <div className="list-section">Chats</div>}
             {visible.map(({ conversation, other }) => (
               <ConversationItem
                 key={conversation._id}
@@ -163,36 +195,81 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
 
             {trimmed && (
               <>
-                <div className="list-section">People on ChatApp</div>
+                {extraGroups.length > 0 && <div className="list-section">Groups</div>}
+                {extraGroups.map(group => (
+                  <button key={group._id} type="button" className="conv-item" onClick={() => openResult(group._id)}>
+                    <span className="conv-avatar">
+                      <Avatar user={{ _id: group._id, name: group.name }} src={group.avatar} size={52} />
+                      <span className="group-badge"><Users size={11} strokeWidth={2.6} /></span>
+                    </span>
+                    <span className="conv-body">
+                      <span className="conv-row"><span className="conv-name">{group.name}</span></span>
+                      <span className="conv-row"><span className="conv-preview"><span className="conv-preview-text">
+                        {group.matchedMember ? <>Member: <Highlight text={group.matchedMember} query={trimmed} /></> : `${group.memberCount} members`}
+                      </span></span></span>
+                    </span>
+                  </button>
+                ))}
+
+                {newPeople.length > 0 && <div className="list-section">People on ChatApp</div>}
                 {newPeople.map(person => (
                   <button key={person._id} type="button" className="conv-item" onClick={() => { setQuery(''); onOpenUser(person); }}>
                     <Avatar user={person} size={52} online={isOnline(person._id)} />
                     <span className="conv-body">
-                      <span className="conv-row"><span className="conv-name">{person.name}</span></span>
+                      <span className="conv-row"><span className="conv-name"><Highlight text={person.name} query={trimmed} /></span></span>
                       <span className="conv-row"><span className="conv-preview"><span className="conv-preview-text">{person.status || person.email}</span></span></span>
                     </span>
                   </button>
                 ))}
-                {!searching && newPeople.length === 0 && visible.length === 0 && (
-                  <p className="empty-hint">No chats or people match “{query.trim()}”.</p>
-                )}
+
+                {results.messages.length > 0 && <div className="list-section">Messages</div>}
+                {results.messages.map(message => {
+                  const row = byId.get(String(message.conversationId));
+                  if (!row) return null;
+                  const { conversation, other, title } = row;
+                  const text = messagePreview(message, user._id, { group: conversation.isGroup });
+                  return (
+                    <button key={message._id} type="button" className="conv-item search-hit" onClick={() => openResult(conversation._id, message._id)}>
+                      <Avatar user={conversation.isGroup ? { _id: conversation._id, name: title } : other} src={conversation.isGroup ? conversation.avatar : undefined} size={44} />
+                      <span className="conv-body">
+                        <span className="conv-row">
+                          <span className="conv-name">{title}</span>
+                          <span className="conv-time">{formatListTime(message.createdAt)}</span>
+                        </span>
+                        <span className="conv-row"><span className="conv-preview"><span className="conv-preview-text"><Highlight text={text} query={trimmed} /></span></span></span>
+                      </span>
+                    </button>
+                  );
+                })}
+
                 {searching && <p className="empty-hint">Searching…</p>}
+                {nothingFound && <p className="empty-hint">Nothing matches “{query.trim()}”.</p>}
               </>
             )}
 
             {!trimmed && visible.length === 0 && (
               <div className="empty-state">
-                <div className="empty-icon"><SquarePen size={28} /></div>
-                <h3>{filter === 'all' ? 'No chats yet' : `No ${filter} chats`}</h3>
-                <p>{filter === 'all' ? 'Search for a friend by name or email to start chatting.' : 'Try another filter.'}</p>
+                <div className="empty-icon">{filter === 'groups' ? <Users size={28} /> : <SquarePen size={28} />}</div>
+                <h3>{filter === 'all' ? 'No chats yet' : `No ${filter === 'groups' ? 'groups' : `${filter} chats`}`}</h3>
+                <p>{filter === 'groups' ? 'Create a group to chat with several people at once.' : filter === 'all' ? 'Search for a friend by name or email to start chatting.' : 'Try another filter.'}</p>
                 {filter === 'all' && (
                   <button type="button" className="btn btn-primary" onClick={() => searchRef.current?.focus()}>Start a new chat</button>
+                )}
+                {filter === 'groups' && (
+                  <button type="button" className="btn btn-primary" onClick={() => setNewGroup(true)}><Users size={18} /> New group</button>
                 )}
               </div>
             )}
           </>
         )}
       </div>
+
+      {newGroup && (
+        <NewGroupDialog
+          onClose={() => setNewGroup(false)}
+          onCreated={(conversation) => { setNewGroup(false); onOpenConversation(conversation); }}
+        />
+      )}
     </div>
   );
 }

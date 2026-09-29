@@ -11,6 +11,7 @@ const {
   deleteMessage,
   reactToMessage,
   getSingleMessage,
+  getMessageInfo,
   clearConversation,
   togglePin,
   toggleMute,
@@ -34,6 +35,7 @@ router.post('/conversation/:conversationId/mute', toggleMute);
 router.patch('/:messageId', editMessage);
 router.delete('/:messageId', deleteMessage);
 router.post('/:messageId/react', reactToMessage);
+router.get('/:messageId/info', getMessageInfo);
 
 router.get('/:conversationId/media', getSharedMedia);
 router.post('/:conversationId/read', markConversationRead);

@@ -60,7 +60,7 @@
 .thread-loader { display: flex; justify-content: center; padding: 8px; }
 .thread-intro { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 28px 12px 22px; text-align: center; }
 .thread-intro strong { font-size: 17px; margin-top: 4px; }
-.thread-intro span { font-size: 13.5px; color: var(--text-2); padding: 6px 14px; border-radius: 12px; background: var(--surface-glass); }
+.thread-intro > span:not(.avatar) { font-size: 13.5px; color: var(--text-2); padding: 6px 14px; border-radius: 12px; background: var(--surface-glass); }
 .thread-skeleton { display: flex; flex-direction: column; gap: 12px; padding: 16px 0; }
 .thread-skeleton span { height: 40px; border-radius: 18px; }
 .thread-skeleton span.is-mine { align-self: flex-end; }

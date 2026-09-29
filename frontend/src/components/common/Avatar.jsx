@@ -15,7 +15,9 @@ const GRADIENTS = [
 const hash = (value = '') => [...String(value)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 
 const initials = (name = '') =>
-  name.trim().split(/\s+/).slice(0, 2).map(part => [...part][0] || '').join('').toUpperCase() || '?';
+  name.trim().split(/\s+/)
+    .map(part => [...part].find(ch => /[\p{L}\p{N}]/u.test(ch)) || '') // skip punctuation like "(" in "(2026)"
+    .filter(Boolean).slice(0, 2).join('').toUpperCase() || '?';
 
 export default function Avatar({ user, name, src, size = 44, online = false, className = '', onClick, ring = false }) {
   const [failedUrl, setFailedUrl] = useState(null);

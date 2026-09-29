@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, Download, Forward, Pencil, Reply, Trash2 } from 'lucide-react';
+import { Copy, Download, Forward, Info, Pencil, Reply, Trash2 } from 'lucide-react';
 import { mediaUrl } from '../../lib/api';
 import { messageMedia } from '../../lib/messages';
 
@@ -8,7 +8,7 @@ const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 const EDIT_WINDOW_MS = 15 * 60 * 1000;
 
 // Floating menu next to the message on desktop; bottom sheet on phones (see chat.css).
-export default function MessageMenu({ menu, myId, onClose, onReact, onReply, onCopy, onForward, onEdit, onDelete }) {
+export default function MessageMenu({ menu, myId, onClose, onReact, onReply, onCopy, onForward, onEdit, onDelete, onInfo }) {
   const { message, x, y } = menu;
   const ref = useRef(null);
   const [openedAt] = useState(() => Date.now());
@@ -48,6 +48,7 @@ export default function MessageMenu({ menu, myId, onClose, onReact, onReply, onC
     media && message.messageType !== 'sticker' && message.messageType !== 'call' && {
       label: 'Download', icon: Download, run: () => window.open(mediaUrl(media.url), '_blank', 'noopener')
     },
+    mine && onInfo && message.messageType !== 'call' && { label: 'Info', icon: Info, run: onInfo },
     { label: 'Delete', icon: Trash2, run: onDelete, danger: true }
   ].filter(Boolean);
 

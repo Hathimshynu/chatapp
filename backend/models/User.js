@@ -34,6 +34,11 @@ const userSchema = new mongoose.Schema({
   lastSeen: {
     type: Date,
     default: Date.now
+  },
+  // Show message text in push notifications (false → just "New message").
+  pushPreview: {
+    type: Boolean,
+    default: true
   }
 }, { timestamps: true });
 

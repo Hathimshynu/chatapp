@@ -10,7 +10,11 @@ const mediaSchema = new mongoose.Schema({
   mimeType: { type: String, required: true },
   name: { type: String, default: '' },
   size: { type: Number, required: true },
-  data: { type: Buffer, required: true }
+  data: { type: Buffer, required: true },
+  // Set for status media so the file disappears with the status.
+  expiresAt: { type: Date, default: undefined }
 }, { timestamps: true });
+
+mediaSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, sparse: true });
 
 module.exports = mongoose.model('Media', mediaSchema);

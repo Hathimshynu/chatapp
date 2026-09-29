@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { setAuthToken } from '../lib/api';
+import { disablePush } from '../lib/push';
 import useLatest from '../hooks/useLatest';
 
 // Several signed-in accounts can live on one device (like Instagram/WhatsApp).
@@ -127,7 +128,11 @@ export const AuthProvider = ({ children }) => {
     if (account) activate(account);
   }, [accounts, activate]);
 
-  const removeAccount = useCallback((id) => {
+  // Logging out also stops push notifications for that account on this device
+  // (skipped when the session already expired — the server would reject it anyway).
+  const removeAccount = useCallback((id, { sessionExpired = false } = {}) => {
+    const account = accounts.find(a => a._id === id);
+    if (account && !sessionExpired) disablePush(account.token).catch(() => {});
     const remaining = accounts.filter(a => a._id !== id);
     commitAccounts(remaining);
     if (id === activeId) activate(remaining[0] || null);
@@ -138,9 +143,10 @@ export const AuthProvider = ({ children }) => {
   }, [activeId, removeAccount]);
 
   const logoutAll = useCallback(() => {
+    accounts.forEach(a => disablePush(a.token).catch(() => {}));
     commitAccounts([]);
     activate(null);
-  }, [commitAccounts, activate]);
+  }, [accounts, commitAccounts, activate]);
 
   const updateUser = useCallback((patch) => {
     const id = userRef.current?._id;
@@ -183,7 +189,7 @@ export const AuthProvider = ({ children }) => {
         const isAuthRoute = String(error.config?.url || '').startsWith('/api/auth/');
         if (error.response?.status === 401 && current && !isAuthRoute && sentAuth === `Bearer ${current.token}`) {
           toast.error(`Session expired for ${current.name}. Please sign in again.`);
-          removeAccount(current._id);
+          removeAccount(current._id, { sessionExpired: true });
         }
         return Promise.reject(error);
       }

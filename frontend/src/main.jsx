@@ -5,6 +5,7 @@ import './styles/auth.css'
 import './styles/sidebar.css'
 import './styles/chat.css'
 import './styles/call.css'
+import './styles/social.css'
 import App from './App.jsx'
 import { registerServiceWorker, trackViewportHeight } from './lib/pwa'
 

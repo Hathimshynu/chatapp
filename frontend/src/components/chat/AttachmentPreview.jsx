@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FileText, Plus, SendHorizontal, X } from 'lucide-react';
 import { attachmentKind } from '../../lib/media';
@@ -9,8 +9,13 @@ import { MAX_UPLOAD_BYTES } from '../../lib/api';
 export default function AttachmentPreview({ files, recipient, onSend, onClose, onAddMore }) {
   const [index, setIndex] = useState(0);
   const [caption, setCaption] = useState('');
-  const urls = useMemo(() => files.map(file => URL.createObjectURL(file)), [files]);
-  useEffect(() => () => urls.forEach(url => URL.revokeObjectURL(url)), [urls]);
+  // The effect owns its object URLs, so a StrictMode re-run can't revoke ones still in use.
+  const [urls, setUrls] = useState([]);
+  useEffect(() => {
+    const created = files.map(file => URL.createObjectURL(file));
+    setUrls(created);
+    return () => created.forEach(url => URL.revokeObjectURL(url));
+  }, [files]);
   useEffect(() => { if (index >= files.length) setIndex(Math.max(files.length - 1, 0)); }, [files.length, index]);
 
   useEffect(() => {

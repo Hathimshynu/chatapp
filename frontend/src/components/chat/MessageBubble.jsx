@@ -3,9 +3,11 @@ import {
   Ban, ChevronDown, Download, FileText, Forward, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Reply, RotateCw, Video
 } from 'lucide-react';
 import Ticks from '../common/Ticks';
+import Avatar from '../common/Avatar';
 import AudioPlayer from './AudioPlayer';
 import { mediaUrl } from '../../lib/api';
 import { messageMedia } from '../../lib/messages';
+import { STATUS_BACKGROUNDS } from '../../lib/status';
 import {
   fileExtension, formatBytes, formatDuration, formatTime, jumboEmojiCount, messagePreview, splitLinks
 } from '../../lib/format';
@@ -33,6 +35,21 @@ function ReplyQuote({ reply, myId, onJump }) {
   );
 }
 
+// Quote shown on a reply/reaction to someone's status.
+function StatusQuote({ statusRef, mine, ownerName }) {
+  return (
+    <div className="reply-quote status-quote">
+      <span className="reply-quote-body">
+        <strong>{mine ? `${ownerName} · Status` : 'You · Status'}</strong>
+        <span>{statusRef.text || (statusRef.type === 'video' ? 'Video' : 'Photo')}</span>
+      </span>
+      {statusRef.type === 'image' && statusRef.mediaUrl
+        ? <img src={mediaUrl(statusRef.mediaUrl)} alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+        : statusRef.type === 'text' && <span className="status-quote-swatch" style={{ background: STATUS_BACKGROUNDS[statusRef.background] || STATUS_BACKGROUNDS.violet }} />}
+    </div>
+  );
+}
+
 function CallLog({ message, mine, onCallBack }) {
   const { type = 'audio', status, duration } = message.call || {};
   const missed = !mine && status !== 'completed';
@@ -56,7 +73,7 @@ function CallLog({ message, mine, onCallBack }) {
 }
 
 function MessageBubble({
-  message, mine, myId, grouped, highlighted, sender,
+  message, mine, myId, grouped, highlighted, sender, isGroup, showSender, senderColor, peerName,
   onOpenMenu, onReply, onJumpTo, onOpenMedia, onRetry, onToggleReaction, onCallBack, onMediaLoad
 }) {
   const rowRef = useRef(null);
@@ -226,11 +243,17 @@ function MessageBubble({
     highlighted ? 'is-highlighted' : ''
   ].filter(Boolean).join(' ');
 
+  const groupAvatar = isGroup && !mine;
   return (
     <div
       id={`msg-${message._id}`}
-      className={`msg-row ${mine ? 'is-mine' : 'is-theirs'}${grouped ? ' is-grouped' : ''}`}
+      className={`msg-row ${mine ? 'is-mine' : 'is-theirs'}${grouped ? ' is-grouped' : ''}${groupAvatar ? ' has-avatar' : ''}`}
     >
+      {groupAvatar && (
+        <span className="msg-avatar" aria-hidden="true">
+          {showSender && <Avatar user={sender} name={message.sender?.name} size={30} />}
+        </span>
+      )}
       <div
         ref={rowRef}
         className="msg-swipe"
@@ -241,6 +264,10 @@ function MessageBubble({
       >
         <span className="swipe-reply-hint" aria-hidden="true"><Reply size={16} /></span>
         <div className={bubbleClass} onContextMenu={openMenuFromEvent} onDoubleClick={() => interactive && onReply(message)}>
+          {groupAvatar && showSender && (
+            <span className="bubble-sender" style={{ color: senderColor }}>{message.sender?.name || 'Former member'}</span>
+          )}
+          {message.statusRef && !deleted && <StatusQuote statusRef={message.statusRef} mine={mine} ownerName={peerName} />}
           {message.forwarded && !deleted && (
             <span className="bubble-forwarded"><Forward size={13} /> Forwarded</span>
           )}
@@ -261,7 +288,7 @@ function MessageBubble({
         )}
       </div>
       {reactions.length > 0 && (
-        <div className="reactions">
+        <div className={`reactions${groupAvatar ? ' has-avatar' : ''}`}>
           {reactions.map(r => (
             <button
               key={r.emoji}

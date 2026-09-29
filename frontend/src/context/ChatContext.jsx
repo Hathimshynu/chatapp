@@ -26,16 +26,28 @@ export const ChatProvider = ({ children }) => {
   const { socket } = useSocket();
   const [conversations, setConversations] = useState([]);
   const [loaded, setLoaded] = useState(false);
-  const [typing, setTyping] = useState({}); // conversationId -> 'typing' | 'recording'
+  // conversationId -> { userId: 'typing' | 'recording' }
+  const [typing, setTyping] = useState({});
+  const [removal, setRemoval] = useState(null); // last group we lost access to
   const activeIdRef = useRef(null);
   const typingTimers = useRef({});
   const conversationsRef = useLatest(conversations);
   const myId = String(user?._id);
 
   const otherParticipant = useCallback(
-    (conversation) => conversation?.participants?.find(p => String(p._id) !== myId) || null,
+    (conversation) => (conversation?.isGroup ? null : conversation?.participants?.find(p => String(p._id) !== myId) || null),
     [myId]
   );
+
+  // Name/avatar to show for any conversation (group or direct).
+  const conversationInfo = useCallback((conversation) => {
+    if (!conversation) return { title: '', avatarUser: null, isGroup: false };
+    if (conversation.isGroup) {
+      return { title: conversation.name, avatarUser: { _id: conversation._id, name: conversation.name, avatar: conversation.avatar }, isGroup: true };
+    }
+    const other = otherParticipant(conversation);
+    return { title: other?.name || 'Unknown', avatarUser: other, isGroup: false, other };
+  }, [otherParticipant]);
 
   const refresh = useCallback(async () => {
     try {
@@ -81,12 +93,18 @@ export const ChatProvider = ({ children }) => {
     ]));
   }, []);
 
-  const clearTyping = useCallback((conversationId) => {
-    clearTimeout(typingTimers.current[conversationId]);
+  const clearTyping = useCallback((conversationId, userId) => {
+    const ids = userId ? [String(userId)] : Object.keys(typingTimers.current)
+      .filter(k => k.startsWith(`${conversationId}:`)).map(k => k.split(':')[1]);
+    ids.forEach(id => clearTimeout(typingTimers.current[`${conversationId}:${id}`]));
     setTyping(prev => {
-      if (!prev[conversationId]) return prev;
+      const current = prev[conversationId];
+      if (!current) return prev;
+      const nextEntry = { ...current };
+      ids.forEach(id => delete nextEntry[id]);
       const next = { ...prev };
-      delete next[conversationId];
+      if (Object.keys(nextEntry).length) next[conversationId] = nextEntry;
+      else delete next[conversationId];
       return next;
     });
   }, []);
@@ -97,12 +115,13 @@ export const ChatProvider = ({ children }) => {
     axios.post(`/api/messages/${conversationId}/read`).catch(() => {});
   }, [patchConversation]);
 
-  // ── Realtime ─────────────────────────────────────────────────────
+  // ── Realtime: messages ───────────────────────────────────────────
   const onNewMessage = useCallback(({ message, conversationId }) => {
     const incoming = String(message.sender?._id || message.sender) !== myId;
     const known = conversationsRef.current.find(c => String(c._id) === String(conversationId));
     const isActive = activeIdRef.current === String(conversationId);
     const appVisible = document.visibilityState === 'visible';
+    const isSystem = message.messageType === 'system';
 
     if (!known) {
       refresh();
@@ -110,28 +129,26 @@ export const ChatProvider = ({ children }) => {
       patchConversation(conversationId, c => ({
         lastMessage: message,
         updatedAt: message.createdAt,
-        unreadCount: incoming && !(isActive && appVisible) ? (c.unreadCount || 0) + 1 : c.unreadCount
+        unreadCount: incoming && !isSystem && !(isActive && appVisible) ? (c.unreadCount || 0) + 1 : c.unreadCount
       }));
     }
 
-    if (!incoming) return;
-    clearTyping(String(conversationId));
+    if (!incoming || isSystem) return;
+    clearTyping(String(conversationId), message.sender?._id);
     if (known?.muted || (isActive && appVisible)) return;
 
     playMessageSound();
-    if (!appVisible || !isActive) {
-      const sender = known ? otherParticipant(known) : null;
-      const name = message.sender?.name || sender?.name || 'New message';
-      if (!appVisible) {
-        showNotification(name, {
-          body: messagePreview(message, myId),
-          tag: `conv-${conversationId}`,
-          conversationId: String(conversationId),
-          icon: sender?.avatar && !sender.avatar.startsWith('data:') ? mediaUrl(sender.avatar) : undefined
-        });
-      }
+    if (!appVisible) {
+      const info = known ? conversationInfo(known) : { title: message.sender?.name };
+      const avatar = info.avatarUser?.avatar;
+      showNotification(info.title || message.sender?.name || 'New message', {
+        body: messagePreview(message, myId, { group: !!known?.isGroup }),
+        tag: `conv-${conversationId}`,
+        conversationId: String(conversationId),
+        icon: avatar && !avatar.startsWith('data:') ? mediaUrl(avatar) : undefined
+      });
     }
-  }, [myId, refresh, patchConversation, clearTyping, otherParticipant, conversationsRef]);
+  }, [myId, refresh, patchConversation, clearTyping, conversationInfo, conversationsRef]);
 
   const onMessageUpdated = useCallback(({ message, conversationId }) => {
     patchConversation(conversationId, c =>
@@ -163,13 +180,17 @@ export const ChatProvider = ({ children }) => {
     patchConversation(conversationId, { lastMessage: null, unreadCount: 0 });
   }, [patchConversation]);
 
-  const onTyping = useCallback(({ conversationId, type }) => {
-    clearTimeout(typingTimers.current[conversationId]);
-    setTyping(prev => (prev[conversationId] === type ? prev : { ...prev, [conversationId]: type }));
-    typingTimers.current[conversationId] = setTimeout(() => clearTyping(conversationId), TYPING_TTL_MS);
+  // ── Realtime: typing (per person, so groups can show several) ────
+  const onTyping = useCallback(({ conversationId, userId, type }) => {
+    const key = `${conversationId}:${userId}`;
+    clearTimeout(typingTimers.current[key]);
+    setTyping(prev => (prev[conversationId]?.[userId] === type
+      ? prev
+      : { ...prev, [conversationId]: { ...prev[conversationId], [userId]: type } }));
+    typingTimers.current[key] = setTimeout(() => clearTyping(conversationId, userId), TYPING_TTL_MS);
   }, [clearTyping]);
 
-  const onTypingStop = useCallback(({ conversationId }) => clearTyping(conversationId), [clearTyping]);
+  const onTypingStop = useCallback(({ conversationId, userId }) => clearTyping(conversationId, userId), [clearTyping]);
 
   const onUserUpdated = useCallback((updated) => {
     setConversations(prev => prev.map(c => ({
@@ -177,6 +198,29 @@ export const ChatProvider = ({ children }) => {
       participants: c.participants.map(p => (String(p._id) === String(updated._id) ? { ...p, ...updated } : p))
     })));
   }, []);
+
+  // ── Realtime: groups ─────────────────────────────────────────────
+  const onGroupUpdated = useCallback(({ conversationId, group }) => {
+    const known = conversationsRef.current.some(c => String(c._id) === String(conversationId));
+    if (!known) {
+      refresh(); // we were just added / created
+      return;
+    }
+    // Merge shared fields; keep per-user fields (unread, pinned, muted).
+    patchConversation(conversationId, c => {
+      const myRole = group.members?.find(m => String(m.user) === myId)?.role || null;
+      const next = { ...group, myRole };
+      if (myRole !== 'admin') next.inviteCode = undefined;
+      else if (c.inviteCode) next.inviteCode = c.inviteCode;
+      return next;
+    });
+  }, [conversationsRef, refresh, patchConversation, myId]);
+
+  const onGroupRemoved = useCallback(({ conversationId, reason }) => {
+    setConversations(prev => prev.filter(c => String(c._id) !== String(conversationId)));
+    clearTyping(String(conversationId));
+    setRemoval({ conversationId: String(conversationId), reason, at: Date.now() });
+  }, [clearTyping]);
 
   useSocketEvent('message:new', onNewMessage);
   useSocketEvent('message:updated', onMessageUpdated);
@@ -188,6 +232,8 @@ export const ChatProvider = ({ children }) => {
   useSocketEvent('typing', onTyping);
   useSocketEvent('typing:stop', onTypingStop);
   useSocketEvent('user:updated', onUserUpdated);
+  useSocketEvent('group:updated', onGroupUpdated);
+  useSocketEvent('group:removed', onGroupRemoved);
 
   useEffect(() => () => Object.values(typingTimers.current).forEach(clearTimeout), []);
 
@@ -236,9 +282,11 @@ export const ChatProvider = ({ children }) => {
     conversations,
     loaded,
     typing,
+    removal,
     totalUnread,
     refresh,
     otherParticipant,
+    conversationInfo,
     upsertConversation,
     patchConversation,
     setActiveConversation,
@@ -246,8 +294,8 @@ export const ChatProvider = ({ children }) => {
     togglePin,
     toggleMute,
     clearChat
-  }), [conversations, loaded, typing, totalUnread, refresh, otherParticipant, upsertConversation,
-    patchConversation, setActiveConversation, markRead, togglePin, toggleMute, clearChat]);
+  }), [conversations, loaded, typing, removal, totalUnread, refresh, otherParticipant, conversationInfo,
+    upsertConversation, patchConversation, setActiveConversation, markRead, togglePin, toggleMute, clearChat]);
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
 };

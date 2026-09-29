@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Eye, EyeOff, Lock, Mail, User } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { errorMessage } from '../lib/api';
+import { errorMessage, safeNextPath } from '../lib/api';
 import AuthLayout from './AuthLayout';
 
 export default function Register() {
@@ -24,7 +24,7 @@ export default function Register() {
     try {
       await register(form.name.trim(), form.email.trim(), form.password);
       toast.success('Account created — welcome to ChatApp!');
-      navigate('/', { replace: true });
+      navigate(safeNextPath(params.get('next')), { replace: true });
     } catch (error) {
       toast.error(errorMessage(error, 'Registration failed'));
       setLoading(false);
@@ -37,7 +37,7 @@ export default function Register() {
     <AuthLayout
       title="Create your account"
       subtitle="It takes less than a minute."
-      footer={<>Already have an account? <Link to={adding ? '/login?add=1' : '/login'}>Sign in</Link></>}
+      footer={<>Already have an account? <Link to={adding ? '/login?add=1' : params.get('next') ? `/login?next=${encodeURIComponent(params.get('next'))}` : '/login'}>Sign in</Link></>}
     >
       <form className="auth-form" onSubmit={handleSubmit}>
         <label className="field with-icon">

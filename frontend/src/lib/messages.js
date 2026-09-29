@@ -7,10 +7,25 @@ export const messageMedia = (message) => {
 };
 
 // WhatsApp-style status: clock (sending) → ✓ sent → ✓✓ delivered → blue ✓✓ read.
+// Group messages carry recipientCount: read/delivered once *every* member has.
 export const messageStatus = (message) => {
   if (message.status === 'pending') return 'pending';
   if (message.status === 'failed') return 'failed';
-  if ((message.seen?.length || 0) > 1) return 'read';
-  if ((message.deliveredTo?.length || 0) > 0) return 'delivered';
+  const read = Math.max((message.seen?.length || 0) - 1, 0);
+  const delivered = message.deliveredTo?.length || 0;
+  if (message.recipientCount) {
+    if (read >= message.recipientCount) return 'read';
+    if (Math.max(delivered, read) >= message.recipientCount) return 'delivered';
+    return 'sent';
+  }
+  if (read > 0) return 'read';
+  if (delivered > 0) return 'delivered';
   return 'sent';
 };
+
+// Display name / avatar holder for any conversation.
+export const conversationTitle = (conversation, other) =>
+  (conversation?.isGroup ? conversation.name : other?.name) || 'Unknown';
+
+// sessionStorage key: conversation to open once the chat list has loaded (invite links).
+export const PENDING_OPEN_KEY = 'chatOpenConversation';

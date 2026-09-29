@@ -40,3 +40,6 @@ export const uploadMedia = async (blob, { name = '', onProgress } = {}) => {
   });
   return data;
 };
+
+// Only allow in-app redirects to invite links after login (no open redirects).
+export const safeNextPath = (value) => (typeof value === 'string' && /^\/join\/[A-Za-z0-9_-]{16,64}$/.test(value) ? value : '/');

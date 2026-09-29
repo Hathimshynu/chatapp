@@ -10,15 +10,17 @@ import { errorMessage } from '../../lib/api';
 const MAX_TARGETS = 5;
 
 export default function ForwardDialog({ message, onClose }) {
-  const { conversations, otherParticipant } = useChat();
+  const { conversations, conversationInfo } = useChat();
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState([]);
   const [sending, setSending] = useState(false);
 
   const rows = useMemo(() => conversations
-    .map(c => ({ conversation: c, other: otherParticipant(c) }))
-    .filter(({ other }) => other && other.name.toLowerCase().includes(query.trim().toLowerCase())),
-  [conversations, otherParticipant, query]);
+    // Skip groups where only admins may post and I'm not one.
+    .filter(c => !c.isGroup || c.settings?.sendMessages !== 'admins' || c.myRole === 'admin')
+    .map(c => ({ conversation: c, ...conversationInfo(c) }))
+    .filter(({ title }) => title.toLowerCase().includes(query.trim().toLowerCase())),
+  [conversations, conversationInfo, query]);
 
   const toggle = (id) => setSelected(prev => {
     if (prev.includes(id)) return prev.filter(x => x !== id);
@@ -63,12 +65,12 @@ export default function ForwardDialog({ message, onClose }) {
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search chats" autoFocus={window.matchMedia('(pointer: fine)').matches} />
       </div>
       <div className="pick-list">
-        {rows.map(({ conversation, other }) => {
+        {rows.map(({ conversation, title, avatarUser, isGroup }) => {
           const checked = selected.includes(conversation._id);
           return (
             <button key={conversation._id} type="button" className={`pick-row${checked ? ' is-checked' : ''}`} onClick={() => toggle(conversation._id)}>
-              <Avatar user={other} size={42} />
-              <span className="pick-name">{other.name}</span>
+              <Avatar user={avatarUser} src={isGroup ? conversation.avatar : undefined} size={42} />
+              <span className="pick-name">{title}{isGroup && <small>Group</small>}</span>
               <span className="pick-check">{checked && <Check size={16} strokeWidth={3} />}</span>
             </button>
           );

@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import {
-  ArrowDown, ArrowLeft, Bell, BellOff, Eraser, EllipsisVertical, Info, Phone, Pin, PinOff, Upload, Video
+  ArrowDown, ArrowLeft, Bell, BellOff, Eraser, EllipsisVertical, Info, Lock, Phone, Pin, PinOff, Upload, Video
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
@@ -17,8 +17,11 @@ import Composer from './Composer';
 import MediaViewer from './MediaViewer';
 import ForwardDialog from './ForwardDialog';
 import ContactPanel from './ContactPanel';
+import GroupInfoPanel from './GroupInfoPanel';
+import MessageInfoDialog from './MessageInfoDialog';
+import { useBackClose } from '../../lib/backStack';
 import { errorMessage, uploadMedia } from '../../lib/api';
-import { formatDayLabel, formatLastSeen, isSameDay } from '../../lib/format';
+import { formatDayLabel, formatLastSeen, isSameDay, systemText, typingLabel } from '../../lib/format';
 import { attachmentKind, compressImage, readVideoMeta } from '../../lib/media';
 import { playSentSound } from '../../lib/sounds';
 
@@ -40,6 +43,9 @@ const reconcile = (list, incoming) => {
 
 const mergeLists = (current, fresh) => fresh.reduce(reconcile, current).sort(byTime);
 
+const SENDER_COLORS = ['#6366f1', '#0ea5e9', '#ec4899', '#f59e0b', '#10b981', '#f43f5e', '#8b5cf6', '#14b8a6', '#f97316', '#3b82f6'];
+const senderColor = (id = '') => SENDER_COLORS[[...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % SENDER_COLORS.length];
+
 const replyShape = (message) => message && ({
   _id: message._id,
   text: message.text,
@@ -49,7 +55,7 @@ const replyShape = (message) => message && ({
   call: message.call
 });
 
-export default function ChatWindow({ conversation, onBack, onConversationCreated }) {
+export default function ChatWindow({ conversation, onBack, onConversationCreated, onOpenUser, focusMessageId, onFocusHandled }) {
   const { user } = useAuth();
   const chat = useChat();
   const { socket, isOnline, lastSeen } = useSocket();
@@ -58,6 +64,11 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   const other = chat.otherParticipant(conversation);
   const convId = String(conversation._id);
   const isTemp = convId.startsWith('temp');
+  const isGroup = !!conversation.isGroup;
+  const { title, avatarUser } = chat.conversationInfo(conversation);
+  const people = useMemo(() => new Map((conversation.participants || []).map(p => [String(p._id), p])), [conversation.participants]);
+  // Group "send messages: admins only" → members get a read-only composer.
+  const canSend = !isGroup || conversation.settings?.sendMessages !== 'admins' || conversation.myRole === 'admin';
 
   const [messages, setMessages] = useState([]);
   const [hasMore, setHasMore] = useState(false);
@@ -75,6 +86,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   const [newBelow, setNewBelow] = useState(0);
   const [highlightId, setHighlightId] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const [infoFor, setInfoFor] = useState(null);
 
   const listRef = useRef(null);
   const composerRef = useRef(null);
@@ -96,8 +108,13 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
     }
   }, [isTemp, convId]);
 
-  const typingState = chat.typing[convId];
-  const online = isOnline(other?._id);
+  const typingEntries = chat.typing[convId];
+  const typingText = typingLabel(typingEntries, id => people.get(String(id))?.name, isGroup);
+  const typingState = typingText || null;
+  const online = !isGroup && isOnline(other?._id);
+
+  // Phone back button closes the info panel before the chat.
+  useBackClose(showInfo, () => setShowInfo(false));
 
   // ── Tell ChatContext which chat is open (for unread counters) ────
   useEffect(() => {
@@ -180,6 +197,24 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
       setLoadingOlder(false);
     }
   }, [loadingOlder, hasMore, messages]);
+
+  // Opened from a search result: load older pages until the message is on screen.
+  useEffect(() => {
+    if (!focusMessageId || loading || loadingOlder) return;
+    if (messages.some(m => m._id === focusMessageId)) {
+      requestAnimationFrame(() => {
+        const el = document.getElementById(`msg-${focusMessageId}`);
+        el?.scrollIntoView({ block: 'center' });
+        setHighlightId(focusMessageId);
+        setTimeout(() => setHighlightId(id => (id === focusMessageId ? null : id)), 1800);
+      });
+      onFocusHandled?.();
+    } else if (hasMore) {
+      loadOlder();
+    } else {
+      onFocusHandled?.();
+    }
+  }, [focusMessageId, loading, loadingOlder, messages, hasMore, loadOlder, onFocusHandled]);
 
   // ── Realtime ─────────────────────────────────────────────────────
   const inThisChat = (conversationId) => !isTempRef.current && String(conversationId) === convIdRef.current;
@@ -497,14 +532,14 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
 
   const openMenu = useCallback((message, point) => setMenu({ message, ...point }), []);
   const startReply = useCallback((message) => { setEditing(null); setReplyTo(message); }, []);
-  const callBack = useCallback((type) => startCall(other, type), [startCall, other]);
+  const callBack = useCallback((type) => { if (other) startCall(other, type); }, [startCall, other]);
 
   const onTyping = useCallback((type) => {
-    if (!isTempRef.current) socket?.emit('typing', { conversationId: convIdRef.current, receiverId: other._id, type });
-  }, [socket, other?._id]);
+    if (!isTempRef.current) socket?.emit('typing', { conversationId: convIdRef.current, type });
+  }, [socket]);
   const onStopTyping = useCallback(() => {
-    if (!isTempRef.current) socket?.emit('typing:stop', { conversationId: convIdRef.current, receiverId: other._id });
-  }, [socket, other?._id]);
+    if (!isTempRef.current) socket?.emit('typing:stop', { conversationId: convIdRef.current });
+  }, [socket]);
 
   // ── Drag & drop files onto the chat (desktop) ────────────────────
   const onDragOver = (event) => {
@@ -526,16 +561,20 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
       if (!prev || !isSameDay(prev.createdAt, message.createdAt)) {
         result.push({ type: 'day', key: `day-${message.createdAt}`, label: formatDayLabel(message.createdAt) });
       }
+      if (message.messageType === 'system') {
+        result.push({ type: 'system', key: message._id, text: systemText(message, myId) });
+        return;
+      }
       const sameSender = prev && String(prev.sender?._id || prev.sender) === String(message.sender?._id || message.sender);
       const grouped = !!(sameSender && isSameDay(prev.createdAt, message.createdAt)
         && new Date(message.createdAt) - new Date(prev.createdAt) < GROUP_WINDOW_MS
-        && prev.messageType !== 'call' && message.messageType !== 'call');
+        && !['call', 'system'].includes(prev.messageType) && message.messageType !== 'call');
       result.push({ type: 'msg', key: message.clientId || message._id, message, grouped });
     });
     return result;
-  }, [messages]);
+  }, [messages, myId]);
 
-  if (!other) {
+  if (!other && !isGroup) {
     return (
       <div className="chat-empty">
         <p>This conversation could not be loaded.</p>
@@ -545,8 +584,16 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   }
 
   let statusLine;
-  if (typingState) statusLine = <span className="is-typing">{typingState === 'recording' ? 'recording audio…' : 'typing…'}</span>;
-  else if (online) statusLine = 'online';
+  if (typingText) statusLine = <span className="is-typing">{typingText}</span>;
+  else if (isGroup) {
+    // "5 members · John, Sarah and 3 others online" — from the shared presence set, no extra traffic.
+    const members = conversation.participants || [];
+    const onlineOthers = members.filter(p => String(p._id) !== myId && isOnline(p._id)).map(p => p.name.split(' ')[0]);
+    const names = onlineOthers.length > 2
+      ? `${onlineOthers.slice(0, 2).join(', ')} and ${onlineOthers.length - 2} other${onlineOthers.length > 3 ? 's' : ''}`
+      : onlineOthers.join(' and ');
+    statusLine = `${members.length} members${onlineOthers.length ? ` · ${names} online` : ''}`;
+  } else if (online) statusLine = 'online';
   else statusLine = formatLastSeen(lastSeen[other._id] || other.lastSeen);
 
   return (
@@ -562,23 +609,27 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
             <ArrowLeft size={22} />
           </button>
           <button type="button" className="chat-peer" onClick={() => setShowInfo(true)}>
-            <Avatar user={other} size={42} online={online} />
+            <Avatar user={avatarUser} src={isGroup ? conversation.avatar : undefined} size={42} online={online} />
             <span className="chat-peer-text">
-              <strong>{other.name}</strong>
+              <strong>{title}</strong>
               <span className="chat-peer-status">{statusLine}</span>
             </span>
           </button>
           <div className="chat-header-actions">
-            <button type="button" className="icon-btn" onClick={() => startCall(other, 'video')} aria-label="Video call" title="Video call">
-              <Video size={22} />
-            </button>
-            <button type="button" className="icon-btn" onClick={() => startCall(other, 'audio')} aria-label="Voice call" title="Voice call">
-              <Phone size={20} />
-            </button>
+            {!isGroup && (
+              <>
+                <button type="button" className="icon-btn" onClick={() => startCall(other, 'video')} aria-label="Video call" title="Video call">
+                  <Video size={22} />
+                </button>
+                <button type="button" className="icon-btn" onClick={() => startCall(other, 'audio')} aria-label="Voice call" title="Voice call">
+                  <Phone size={20} />
+                </button>
+              </>
+            )}
             <Menu
               trigger={<EllipsisVertical size={20} />}
               items={[
-                { icon: Info, label: 'Contact info', onClick: () => setShowInfo(true) },
+                { icon: Info, label: isGroup ? 'Group info' : 'Contact info', onClick: () => setShowInfo(true) },
                 !isTemp && { icon: conversation.muted ? Bell : BellOff, label: conversation.muted ? 'Unmute notifications' : 'Mute notifications', onClick: () => chat.toggleMute(conversation) },
                 !isTemp && { icon: conversation.pinned ? PinOff : Pin, label: conversation.pinned ? 'Unpin chat' : 'Pin chat', onClick: () => chat.togglePin(conversation) },
                 !isTemp && { icon: Eraser, label: 'Clear chat', onClick: () => setConfirmClear(true), danger: true }
@@ -592,9 +643,11 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
             {loadingOlder && <div className="thread-loader"><span className="spinner spinner-sm" /></div>}
             {!loading && !hasMore && (
               <div className="thread-intro">
-                <Avatar user={other} size={72} />
-                <strong>{other.name}</strong>
-                <span>{isTemp || messages.length === 0 ? `Say hi to ${other.name.split(' ')[0]} 👋` : 'This is the start of your conversation'}</span>
+                <Avatar user={avatarUser} src={isGroup ? conversation.avatar : undefined} size={72} />
+                <strong>{title}</strong>
+                <span>{isGroup
+                  ? `Group · ${conversation.participants?.length || 0} members`
+                  : isTemp || messages.length === 0 ? `Say hi to ${other.name.split(' ')[0]} 👋` : 'This is the start of your conversation'}</span>
               </div>
             )}
             {loading ? (
@@ -603,13 +656,21 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
               </div>
             ) : rows.map(row => (row.type === 'day' ? (
               <div key={row.key} className="day-divider"><span>{row.label}</span></div>
+            ) : row.type === 'system' ? (
+              <div key={row.key} className="system-row"><span>{row.text}</span></div>
             ) : (
               <Fragment key={row.key}>
                 <MessageBubble
                   message={row.message}
                   mine={String(row.message.sender?._id || row.message.sender) === myId}
                   myId={myId}
-                  sender={String(row.message.sender?._id || row.message.sender) === myId ? user : other}
+                  sender={String(row.message.sender?._id || row.message.sender) === myId
+                    ? user
+                    : (isGroup ? people.get(String(row.message.sender?._id || row.message.sender)) || row.message.sender : other)}
+                  isGroup={isGroup}
+                  showSender={isGroup && !row.grouped}
+                  senderColor={senderColor(row.message.sender?._id || row.message.sender)}
+                  peerName={other?.name}
                   grouped={row.grouped}
                   highlighted={highlightId === row.message._id}
                   onOpenMenu={openMenu}
@@ -625,7 +686,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
             )))}
             {typingState && (
               <div className="msg-row is-theirs typing-row">
-                <div className="bubble is-theirs has-tail typing-bubble" aria-label={`${other.name} is typing`}>
+                <div className="bubble is-theirs has-tail typing-bubble" aria-label={typingText}>
                   <i /><i /><i />
                 </div>
               </div>
@@ -640,12 +701,17 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
           </button>
         )}
 
+        {!canSend ? (
+          <div className="composer composer-locked">
+            <Lock size={16} /> Only admins can send messages to this group
+          </div>
+        ) : (
         <Composer
           ref={composerRef}
-          key={other._id}
-          draftId={other._id}
+          key={isGroup ? convId : other._id}
+          draftId={isGroup ? convId : other._id}
           myId={myId}
-          recipientName={other.name}
+          recipientName={title}
           replyTo={replyTo}
           onCancelReply={() => setReplyTo(null)}
           editing={editing}
@@ -658,16 +724,25 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
           onTyping={onTyping}
           onStopTyping={onStopTyping}
         />
+        )}
 
         {dragging && (
           <div className="drop-overlay">
             <Upload size={36} />
-            <span>Drop files to send to {other.name}</span>
+            <span>Drop files to send to {title}</span>
           </div>
         )}
       </div>
 
-      {showInfo && (
+      {showInfo && isGroup && (
+        <GroupInfoPanel
+          conversation={conversation}
+          onClose={() => setShowInfo(false)}
+          onOpenMedia={setViewer}
+          onMessageUser={(person) => { setShowInfo(false); onOpenUser?.(person); }}
+        />
+      )}
+      {showInfo && !isGroup && (
         <ContactPanel
           conversation={conversation}
           other={other}
@@ -691,8 +766,10 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
           onForward={setForwarding}
           onEdit={(message) => { setReplyTo(null); setEditing(message); }}
           onDelete={setDeleteTarget}
+          onInfo={(message) => setInfoFor(message._id)}
         />
       )}
+      {infoFor && <MessageInfoDialog messageId={infoFor} onClose={() => setInfoFor(null)} />}
 
       {deleteTarget && (
         <Dialog title="Delete message?" onClose={() => setDeleteTarget(null)}>
@@ -708,7 +785,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
 
       {confirmClear && (
         <Dialog title="Clear this chat?" onClose={() => setConfirmClear(false)}>
-          <p className="dialog-text">Messages will be removed from this device for you. {other.name} will still see them.</p>
+          <p className="dialog-text">Messages will be removed from this device for you. {isGroup ? 'Other members' : other.name} will still see them.</p>
           <div className="dialog-actions">
             <button
               type="button"
@@ -729,7 +806,9 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
       {viewer && (
         <MediaViewer
           message={viewer}
-          senderName={String(viewer.sender?._id || viewer.sender) === myId ? 'You' : other.name}
+          senderName={String(viewer.sender?._id || viewer.sender) === myId
+            ? 'You'
+            : isGroup ? viewer.sender?.name || title : other.name}
           onClose={() => setViewer(null)}
         />
       )}

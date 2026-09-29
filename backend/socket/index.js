@@ -4,6 +4,8 @@ const { userFromToken } = require('../middleware/auth');
 const { setIo, isOnline, onlineUserIds, userRoom } = require('../utils/realtime');
 const { registerCallHandlers, endCallsForUser } = require('./calls');
 const { markPendingDelivered } = require('../controllers/messageController');
+const { participantsOf } = require('../services/groups');
+const mongoose = require('mongoose');
 
 // Grace periods so a page refresh or a brief mobile network drop doesn't
 // flash "offline" or kill an ongoing call.
@@ -48,18 +50,22 @@ const initSocket = (server, allowedOrigins) => {
     markPendingDelivered(userId).catch(error => console.error('markPendingDelivered:', error.message));
 
     // ── Typing / recording indicators ────────────────────────────────
-    socket.on('typing', ({ conversationId, receiverId, type } = {}) => {
-      if (!conversationId || !receiverId) return;
-      io.to(userRoom(receiverId)).emit('typing', {
-        conversationId: String(conversationId),
-        userId,
-        type: type === 'recording' ? 'recording' : 'typing'
-      });
+    // Recipients come from the conversation's membership (cached), never from
+    // the client, so typing can't be sent into chats the user isn't part of.
+    const relayTyping = async (event, conversationId, extra = {}) => {
+      if (!mongoose.isValidObjectId(conversationId)) return;
+      const members = await participantsOf(conversationId);
+      if (!members?.has(userId)) return;
+      const rooms = [...members].filter(id => id !== userId).map(userRoom);
+      if (rooms.length) io.to(rooms).emit(event, { conversationId: String(conversationId), userId, ...extra });
+    };
+
+    socket.on('typing', ({ conversationId, type } = {}) => {
+      relayTyping('typing', conversationId, { type: type === 'recording' ? 'recording' : 'typing' }).catch(() => {});
     });
 
-    socket.on('typing:stop', ({ conversationId, receiverId } = {}) => {
-      if (!conversationId || !receiverId) return;
-      io.to(userRoom(receiverId)).emit('typing:stop', { conversationId: String(conversationId), userId });
+    socket.on('typing:stop', ({ conversationId } = {}) => {
+      relayTyping('typing:stop', conversationId).catch(() => {});
     });
 
     registerCallHandlers(io, socket);

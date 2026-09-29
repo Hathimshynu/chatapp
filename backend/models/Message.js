@@ -36,6 +36,45 @@ const callSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// Group events ("Alice added Bob"). Names are resolved from the ids at read time.
+const systemSchema = new mongoose.Schema(
+  {
+    action: {
+      type: String,
+      enum: ["created", "added", "removed", "left", "joined", "promoted", "demoted", "renamed", "description", "avatar", "settings", "invite_reset"],
+      required: true,
+    },
+    actor: { type: ObjectId, ref: "User" },
+    targets: [{ type: ObjectId, ref: "User" }],
+    value: { type: String, default: "" },
+  },
+  { _id: false },
+);
+
+// Timestamped receipts ("Read by … at …"). One entry per user per kind, so the
+// array is bounded by 2 × group size.
+const receiptSchema = new mongoose.Schema(
+  {
+    user: { type: ObjectId, ref: "User", required: true },
+    kind: { type: String, enum: ["delivered", "read"], required: true },
+    at: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
+// Snapshot of the status a message replies to (the status itself expires).
+const statusRefSchema = new mongoose.Schema(
+  {
+    status: { type: ObjectId, ref: "Status" },
+    owner: { type: ObjectId, ref: "User" },
+    type: { type: String, enum: ["text", "image", "video"] },
+    text: { type: String, default: "" },
+    background: { type: String, default: "" },
+    mediaUrl: { type: String, default: "" },
+  },
+  { _id: false },
+);
+
 const messageSchema = new mongoose.Schema(
   {
     conversationId: {
@@ -54,9 +93,14 @@ const messageSchema = new mongoose.Schema(
     },
     messageType: {
       type: String,
-      enum: ["text", "image", "video", "audio", "file", "sticker", "call"],
+      enum: ["text", "image", "video", "audio", "file", "sticker", "call", "system"],
       default: "text",
     },
+    system: { type: systemSchema, default: undefined },
+    statusRef: { type: statusRefSchema, default: undefined },
+    // Group messages: how many other members should receive it (drives group ticks).
+    recipientCount: { type: Number, default: undefined },
+    receipts: { type: [receiptSchema], default: undefined },
     media: { type: mediaSchema, default: undefined },
     // Legacy inline base64 fields — kept so older messages still render.
     image: { type: String, default: "" },

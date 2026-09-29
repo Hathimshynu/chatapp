@@ -45,6 +45,10 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/messages', require('./routes/messages'));
 app.use('/api/media', require('./routes/media'));
 app.use('/api/calls', require('./routes/calls'));
+app.use('/api/groups', require('./routes/groups'));
+app.use('/api/status', require('./routes/status'));
+app.use('/api/search', require('./routes/search'));
+app.use('/api/push', require('./routes/push'));
 
 // Payload too large / bad JSON → clean JSON errors instead of HTML stack traces.
 app.use((err, req, res, next) => {

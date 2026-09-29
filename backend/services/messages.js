@@ -1,5 +1,6 @@
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
+const User = require('../models/User');
 const { emitToUsers, isOnline } = require('../utils/realtime');
 
 // Avatars are deliberately not populated on messages: they can be large legacy
@@ -10,7 +11,9 @@ const MESSAGE_POPULATE = [
     path: 'replyTo',
     select: 'text messageType sender deleted media.url media.mimeType media.name media.duration call',
     populate: { path: 'sender', select: 'name' }
-  }
+  },
+  { path: 'system.actor', select: 'name' },
+  { path: 'system.targets', select: 'name' }
 ];
 
 const PARTICIPANT_FIELDS = 'name email avatar status lastSeen';
@@ -21,6 +24,7 @@ const idsEqual = (a, b) => String(a) === String(b);
 const serializeMessage = (doc) => {
   const message = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc };
   delete message.deletedFor;
+  delete message.receipts; // exposed only through the message-info endpoint
   delete message.__v;
   if (message.deleted) {
     message.text = '';
@@ -29,6 +33,7 @@ const serializeMessage = (doc) => {
     message.audio = '';
     message.reactions = [];
     message.replyTo = null;
+    message.statusRef = undefined;
   }
   if (message.replyTo && message.replyTo.deleted) {
     message.replyTo = { _id: message.replyTo._id, deleted: true, sender: message.replyTo.sender };
@@ -38,6 +43,24 @@ const serializeMessage = (doc) => {
 
 const findConversationFor = (userId, conversationId) =>
   Conversation.findOne({ _id: conversationId, participants: userId });
+
+// When a member joined a group; null for direct chats (they see everything).
+const memberJoinedAt = (conversation, userId) => {
+  if (!conversation?.isGroup) return null;
+  const member = (conversation.members || []).find(m => idsEqual(m.user, userId));
+  return member?.joinedAt || null;
+};
+
+// Group members only see messages sent after they joined (like WhatsApp).
+const visibleSinceFilter = (conversation, userId) => {
+  const joinedAt = memberJoinedAt(conversation, userId);
+  return joinedAt ? { createdAt: { $gte: joinedAt } } : {};
+};
+
+const isVisibleTo = (conversation, message, userId) => {
+  const joinedAt = memberJoinedAt(conversation, userId);
+  return !joinedAt || message.createdAt >= joinedAt;
+};
 
 const findOrCreateDirectConversation = async (userA, userB) => {
   let conversation = await Conversation.findOne({
@@ -59,17 +82,24 @@ const loadMessage = (messageId) =>
 // devices (including the sender's other tabs).
 const createAndBroadcastMessage = async ({ conversation, senderId, fields, created = false }) => {
   const otherIds = conversation.participants.filter(id => !idsEqual(id, senderId));
+  const isSystem = fields.messageType === 'system';
+  const deliveredTo = fields.deliveredTo || (isSystem ? [] : otherIds.filter(id => isOnline(id)));
+  const now = new Date();
   const message = await Message.create({
     conversationId: conversation._id,
     sender: senderId,
     ...fields,
     seen: fields.seen || [senderId],
-    deliveredTo: fields.deliveredTo || otherIds.filter(id => isOnline(id))
+    deliveredTo,
+    ...(conversation.isGroup && !isSystem ? {
+      recipientCount: otherIds.length,
+      receipts: deliveredTo.map(user => ({ user, kind: 'delivered', at: now }))
+    } : {})
   });
 
   await Conversation.updateOne(
     { _id: conversation._id },
-    { $set: { lastMessage: message._id, updatedAt: new Date() } },
+    { $set: { lastMessage: message._id, updatedAt: now } },
     { timestamps: false }
   );
 
@@ -79,6 +109,9 @@ const createAndBroadcastMessage = async ({ conversation, senderId, fields, creat
     conversationId: String(conversation._id),
     conversationCreated: created
   });
+
+  // Web Push for recipients with no open app (lazy require avoids a cycle).
+  if (!isSystem) require('./push').notifyNewMessage(conversation, populated, senderId);
   return populated;
 };
 
@@ -91,14 +124,47 @@ const broadcastMessageUpdate = async (conversation, messageId) => {
   return updated;
 };
 
+// ── Group system messages ("Alice added Bob") ─────────────────────
+const SYSTEM_TEXT = {
+  created: (a, t, v) => `${a} created the group "${v}"`,
+  added: (a, t) => `${a} added ${t}`,
+  removed: (a, t) => `${a} removed ${t}`,
+  left: (a) => `${a} left`,
+  joined: (a) => `${a} joined using the invite link`,
+  promoted: (a, t, v) => (v === 'auto' ? `${t} is now an admin` : `${a} made ${t} an admin`),
+  demoted: (a, t) => `${a} dismissed ${t} as admin`,
+  renamed: (a, t, v) => `${a} changed the group name to "${v}"`,
+  description: (a) => `${a} changed the group description`,
+  avatar: (a) => `${a} changed the group photo`,
+  settings: (a) => `${a} changed the group settings`,
+  invite_reset: (a) => `${a} reset the invite link`
+};
+
+const joinNames = (names) => (names.length <= 2 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`);
+
+const createSystemMessage = async (conversation, actorId, action, { targets = [], value = '' } = {}) => {
+  const users = await User.find({ _id: { $in: [actorId, ...targets] } }).select('name').lean();
+  const nameOf = (id) => users.find(u => idsEqual(u._id, id))?.name || 'Someone';
+  const text = SYSTEM_TEXT[action](nameOf(actorId), joinNames(targets.map(nameOf)), value);
+  return createAndBroadcastMessage({
+    conversation,
+    senderId: actorId,
+    fields: { messageType: 'system', text, system: { action, actor: actorId, targets, value } }
+  });
+};
+
 module.exports = {
   MESSAGE_POPULATE,
   PARTICIPANT_FIELDS,
   idsEqual,
   serializeMessage,
   findConversationFor,
+  memberJoinedAt,
+  visibleSinceFilter,
+  isVisibleTo,
   findOrCreateDirectConversation,
   createAndBroadcastMessage,
   broadcastMessageUpdate,
+  createSystemMessage,
   loadMessage
 };

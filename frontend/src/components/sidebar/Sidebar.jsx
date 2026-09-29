@@ -1,13 +1,16 @@
-import { MessageCircle, Phone, Settings } from 'lucide-react';
+import { CircleDashed, MessageCircle, Phone, Settings } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
+import { useStatus } from '../../context/StatusContext';
 import Avatar from '../common/Avatar';
 import ChatList from './ChatList';
 import CallsPanel from './CallsPanel';
+import StatusPanel from './StatusPanel';
 import SettingsPanel from './SettingsPanel';
 
 const TABS = [
   { id: 'chats', label: 'Chats', icon: MessageCircle },
+  { id: 'status', label: 'Status', icon: CircleDashed },
   { id: 'calls', label: 'Calls', icon: Phone },
   { id: 'settings', label: 'Settings', icon: Settings }
 ];
@@ -15,6 +18,7 @@ const TABS = [
 export default function Sidebar({ view, onViewChange, activeConversationId, onOpenConversation, onOpenUser }) {
   const { user } = useAuth();
   const { totalUnread } = useChat();
+  const { unseenCount } = useStatus();
 
   return (
     <aside className="sidebar">
@@ -34,6 +38,7 @@ export default function Sidebar({ view, onViewChange, activeConversationId, onOp
               {id === 'chats' && totalUnread > 0 && (
                 <span className="badge nav-badge">{totalUnread > 99 ? '99+' : totalUnread}</span>
               )}
+              {id === 'status' && unseenCount > 0 && <span className="nav-dot" aria-label={`${unseenCount} new status updates`} />}
             </span>
             <span className="nav-label">{label}</span>
           </button>
@@ -50,6 +55,7 @@ export default function Sidebar({ view, onViewChange, activeConversationId, onOp
             onOpenUser={onOpenUser}
           />
         )}
+        {view === 'status' && <StatusPanel />}
         {view === 'calls' && <CallsPanel onOpenConversation={onOpenConversation} onOpenUser={onOpenUser} />}
         {view === 'settings' && <SettingsPanel />}
       </section>

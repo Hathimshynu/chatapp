@@ -5,14 +5,17 @@ const User = require('../models/User');
 const { emitToUsers } = require('../utils/realtime');
 const {
   MESSAGE_POPULATE,
-  PARTICIPANT_FIELDS,
   idsEqual,
   serializeMessage,
   findConversationFor,
   findOrCreateDirectConversation,
   createAndBroadcastMessage,
-  broadcastMessageUpdate
+  broadcastMessageUpdate,
+  memberJoinedAt,
+  visibleSinceFilter,
+  isVisibleTo
 } = require('../services/messages');
+const { populateConversation, shapeConversation, can } = require('../services/groups');
 
 const SENDABLE_TYPES = ['text', 'image', 'video', 'audio', 'file', 'sticker'];
 const MAX_TEXT_LENGTH = 5000;
@@ -20,34 +23,24 @@ const EDIT_WINDOW_MS = 15 * 60 * 1000;
 
 const isValidId = (id) => mongoose.isValidObjectId(id);
 
-const populateConversation = (query) => query
-  .populate('participants', PARTICIPANT_FIELDS)
-  .populate({
-    path: 'lastMessage',
-    select: '-image -audio -reactions -replyTo',
-    populate: { path: 'sender', select: 'name' }
-  });
-
-const shapeConversation = (conversation, userId, unreadCount = 0) => {
-  const lastMessage = conversation.lastMessage;
-  const hiddenForMe = lastMessage?.deletedFor?.some(id => idsEqual(id, userId));
-  return {
-    ...conversation,
-    lastMessage: lastMessage && !hiddenForMe ? serializeMessage(lastMessage) : null,
-    pinned: (conversation.pinnedBy || []).some(id => idsEqual(id, userId)),
-    muted: (conversation.mutedBy || []).some(id => idsEqual(id, userId)),
-    pinnedBy: undefined,
-    mutedBy: undefined,
-    unreadCount
-  };
-};
-
 const unreadFilter = (userId) => ({
   sender: { $ne: userId },
   seen: { $ne: userId },
+  messageType: { $ne: 'system' },
   deleted: { $ne: true },
   deletedFor: { $ne: userId }
 });
+
+// Messages a user may see across many conversations: everything in direct chats,
+// and only messages since they joined in each group.
+const scopeFor = (conversations, userId) => {
+  const direct = conversations.filter(c => !c.isGroup).map(c => c._id);
+  const scope = direct.length ? [{ conversationId: { $in: direct } }] : [];
+  for (const c of conversations.filter(g => g.isGroup)) {
+    scope.push({ conversationId: c._id, createdAt: { $gte: memberJoinedAt(c, userId) || new Date(0) } });
+  }
+  return scope;
+};
 
 // @GET /api/messages/conversations
 const getConversations = async (req, res) => {
@@ -57,10 +50,11 @@ const getConversations = async (req, res) => {
       Conversation.find({ participants: userId })
     ).sort({ updatedAt: -1 }).lean();
 
-    const counts = await Message.aggregate([
-      { $match: { conversationId: { $in: conversations.map(c => c._id) }, ...unreadFilter(userId) } },
+    const scope = scopeFor(conversations, userId);
+    const counts = scope.length ? await Message.aggregate([
+      { $match: { $or: scope, ...unreadFilter(userId) } },
       { $group: { _id: '$conversationId', count: { $sum: 1 } } }
-    ]);
+    ]) : [];
     const countMap = new Map(counts.map(c => [String(c._id), c.count]));
 
     res.json(conversations.map(c => shapeConversation(c, userId, countMap.get(String(c._id)) || 0)));
@@ -72,11 +66,9 @@ const getConversations = async (req, res) => {
 // @GET /api/messages/unread-count — total unread, used by the account switcher
 const getUnreadCount = async (req, res) => {
   try {
-    const conversationIds = await Conversation.find({ participants: req.user._id }).distinct('_id');
-    const total = await Message.countDocuments({
-      conversationId: { $in: conversationIds },
-      ...unreadFilter(req.user._id)
-    });
+    const conversations = await Conversation.find({ participants: req.user._id }).select('isGroup members').lean();
+    const scope = scopeFor(conversations, req.user._id);
+    const total = scope.length ? await Message.countDocuments({ $or: scope, ...unreadFilter(req.user._id) }) : 0;
     res.json({ total });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -91,10 +83,10 @@ const getMessages = async (req, res) => {
     if (!conversation) return res.status(403).json({ message: 'Access denied' });
 
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 40, 1), 100);
-    const filter = { conversationId: conversation._id, deletedFor: { $ne: req.user._id } };
+    const filter = { conversationId: conversation._id, deletedFor: { $ne: req.user._id }, ...visibleSinceFilter(conversation, req.user._id) };
     if (req.query.before) {
       const before = new Date(req.query.before);
-      if (!Number.isNaN(before.getTime())) filter.createdAt = { $lt: before };
+      if (!Number.isNaN(before.getTime())) filter.createdAt = { ...filter.createdAt, $lt: before };
     }
 
     const messages = await Message.find(filter)
@@ -124,7 +116,8 @@ const getSharedMedia = async (req, res) => {
       messageType: { $in: ['image', 'video'] },
       'media.url': { $exists: true, $ne: '' },
       deleted: { $ne: true },
-      deletedFor: { $ne: req.user._id }
+      deletedFor: { $ne: req.user._id },
+      ...visibleSinceFilter(conversation, req.user._id)
     })
       .select('messageType media createdAt')
       .sort({ createdAt: -1 })
@@ -176,6 +169,9 @@ const sendMessage = async (req, res) => {
     if (conversationId && isValidId(conversationId)) {
       conversation = await findConversationFor(req.user._id, conversationId);
       if (!conversation) return res.status(403).json({ message: 'Access denied' });
+      if (conversation.isGroup && !can(conversation, req.user._id, 'sendMessages')) {
+        return res.status(403).json({ message: 'Only admins can send messages to this group' });
+      }
     } else {
       if (!receiverId || !isValidId(receiverId)) {
         return res.status(400).json({ message: 'Receiver is required' });
@@ -191,7 +187,7 @@ const sendMessage = async (req, res) => {
 
     let replyToId = null;
     if (replyTo && isValidId(replyTo)) {
-      const original = await Message.exists({ _id: replyTo, conversationId: conversation._id });
+      const original = await Message.exists({ _id: replyTo, conversationId: conversation._id, messageType: { $ne: 'system' }, ...visibleSinceFilter(conversation, req.user._id) });
       if (original) replyToId = replyTo;
     }
 
@@ -223,6 +219,24 @@ const sendMessage = async (req, res) => {
   }
 };
 
+// Add delivered/read receipts with timestamps. The `$ne` filters make each push
+// happen at most once per user, so the receipts array stays bounded.
+const recordReceipts = async (messageIds, userId, kinds) => {
+  const at = new Date();
+  if (kinds.includes('delivered')) {
+    await Message.updateMany(
+      { _id: { $in: messageIds }, deliveredTo: { $ne: userId } },
+      { $addToSet: { deliveredTo: userId }, $push: { receipts: { user: userId, kind: 'delivered', at } } }
+    );
+  }
+  if (kinds.includes('read')) {
+    await Message.updateMany(
+      { _id: { $in: messageIds }, seen: { $ne: userId } },
+      { $addToSet: { seen: userId }, $push: { receipts: { user: userId, kind: 'read', at } } }
+    );
+  }
+};
+
 // @POST /api/messages/:conversationId/read
 const markConversationRead = async (req, res) => {
   try {
@@ -230,7 +244,11 @@ const markConversationRead = async (req, res) => {
     const conversation = await findConversationFor(req.user._id, req.params.conversationId);
     if (!conversation) return res.status(403).json({ message: 'Access denied' });
 
-    const unseen = await Message.find({ conversationId: conversation._id, ...unreadFilter(req.user._id) })
+    const unseen = await Message.find({
+      conversationId: conversation._id,
+      ...unreadFilter(req.user._id),
+      ...visibleSinceFilter(conversation, req.user._id)
+    })
       .select('_id sender')
       .lean();
 
@@ -238,10 +256,7 @@ const markConversationRead = async (req, res) => {
     emitToUsers([req.user._id], 'conversation:read', { conversationId: String(conversation._id) });
     if (!unseen.length) return res.json({ updated: 0 });
 
-    await Message.updateMany(
-      { _id: { $in: unseen.map(m => m._id) } },
-      { $addToSet: { seen: req.user._id, deliveredTo: req.user._id } }
-    );
+    await recordReceipts(unseen.map(m => m._id), req.user._id, ['delivered', 'read']);
 
     const bySender = new Map();
     for (const message of unseen) {
@@ -264,20 +279,19 @@ const markConversationRead = async (req, res) => {
 
 // Mark everything waiting for this user as delivered (called when they come online).
 const markPendingDelivered = async (userId) => {
-  const conversationIds = await Conversation.find({ participants: userId }).distinct('_id');
-  if (!conversationIds.length) return;
+  const conversations = await Conversation.find({ participants: userId }).select('isGroup members').lean();
+  const scope = scopeFor(conversations, userId);
+  if (!scope.length) return;
   const pending = await Message.find({
-    conversationId: { $in: conversationIds },
+    $or: scope,
     sender: { $ne: userId },
     deliveredTo: { $ne: userId },
+    messageType: { $ne: 'system' },
     deleted: { $ne: true }
   }).select('_id sender conversationId').lean();
   if (!pending.length) return;
 
-  await Message.updateMany(
-    { _id: { $in: pending.map(m => m._id) } },
-    { $addToSet: { deliveredTo: userId } }
-  );
+  await recordReceipts(pending.map(m => m._id), userId, ['delivered']);
 
   const groups = new Map();
   for (const message of pending) {
@@ -303,6 +317,10 @@ const loadOwnedContext = async (req, res) => {
   const conversation = await findConversationFor(req.user._id, message.conversationId);
   if (!conversation) {
     res.status(403).json({ message: 'Access denied' });
+    return null;
+  }
+  if (!isVisibleTo(conversation, message, req.user._id) || message.deletedFor?.some(id => idsEqual(id, req.user._id))) {
+    res.status(404).json({ message: 'Message not found' });
     return null;
   }
   return { message, conversation };
@@ -348,7 +366,7 @@ const deleteMessage = async (req, res) => {
       return res.json({ success: true });
     }
 
-    if (!idsEqual(message.sender, req.user._id)) {
+    if (!idsEqual(message.sender, req.user._id) || message.messageType === 'system') {
       return res.status(403).json({ message: 'You can only delete your own messages for everyone' });
     }
     message.deleted = true;
@@ -370,7 +388,7 @@ const reactToMessage = async (req, res) => {
     const context = await loadOwnedContext(req, res);
     if (!context) return;
     const { message, conversation } = context;
-    if (message.deleted) return res.status(400).json({ message: 'Cannot react to a deleted message' });
+    if (message.deleted || message.messageType === 'system') return res.status(400).json({ message: 'Cannot react to this message' });
 
     const emoji = typeof req.body.emoji === 'string' ? req.body.emoji.trim().slice(0, 16) : '';
     const existing = message.reactions.find(r => idsEqual(r.user, req.user._id));
@@ -380,6 +398,32 @@ const reactToMessage = async (req, res) => {
     }
     await message.save();
     res.json(await broadcastMessageUpdate(conversation, message._id));
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @GET /api/messages/:messageId/info — who received / read your message, and when
+const getMessageInfo = async (req, res) => {
+  try {
+    const context = await loadOwnedContext(req, res);
+    if (!context) return;
+    const { message, conversation } = context;
+    if (!idsEqual(message.sender, req.user._id)) return res.status(403).json({ message: 'Only the sender can view message info' });
+
+    const recipientIds = conversation.participants.filter(id => !idsEqual(id, req.user._id));
+    const users = await User.find({ _id: { $in: recipientIds } }).select('name avatar').lean();
+    const at = (userId, kind) => message.receipts?.find(r => idsEqual(r.user, userId) && r.kind === kind)?.at || null;
+    const recipients = users.map(user => {
+      const read = message.seen.some(id => idsEqual(id, user._id));
+      const delivered = read || message.deliveredTo.some(id => idsEqual(id, user._id));
+      return {
+        user: { _id: user._id, name: user.name, avatar: user.avatar?.startsWith('data:') ? '' : user.avatar },
+        deliveredAt: delivered ? (at(user._id, 'delivered') || at(user._id, 'read') || true) : null,
+        readAt: read ? (at(user._id, 'read') || true) : null
+      };
+    });
+    res.json({ messageId: message._id, sentAt: message.createdAt, recipients });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -487,6 +531,8 @@ module.exports = {
   deleteMessage,
   reactToMessage,
   getSingleMessage,
+  getMessageInfo,
+  scopeFor,
   clearConversation,
   togglePin: toggleMembership('pinnedBy'),
   toggleMute: toggleMembership('mutedBy'),

@@ -5,7 +5,9 @@ import { useChat } from '../context/ChatContext';
 import Sidebar from '../components/sidebar/Sidebar';
 import ChatWindow from '../components/chat/ChatWindow';
 import { OPEN_CONVERSATION_EVENT, useInstallPrompt } from '../lib/pwa';
-import useLatest from '../hooks/useLatest';
+import toast from 'react-hot-toast';
+import { useBackClose } from '../lib/backStack';
+import { PENDING_OPEN_KEY } from '../lib/messages';
 
 function Welcome() {
   const install = useInstallPrompt();
@@ -35,8 +37,8 @@ export default function Home() {
   const { user } = useAuth();
   const chat = useChat();
   const [view, setView] = useState('chats');
-  const [selected, setSelected] = useState(null); // { id, snapshot } for real chats, { temp } for a new one
-  const selectedRef = useLatest(selected);
+  // { id, snapshot, focusMessageId? } for real chats, { temp } for a new direct chat
+  const [selected, setSelected] = useState(null);
 
   const current = useMemo(() => {
     if (!selected) return null;
@@ -44,26 +46,15 @@ export default function Home() {
     return chat.conversations.find(c => String(c._id) === selected.id) || selected.snapshot;
   }, [selected, chat.conversations]);
 
-  // Phone back button / swipe-back closes the open chat instead of leaving the app.
-  const select = useCallback((next) => {
-    if (next && !selectedRef.current) window.history.pushState({ chatOpen: true }, '');
-    setSelected(next);
-  }, [selectedRef]);
+  // Phone back button / swipe-back closes the open chat instead of leaving the app
+  // (shared back stack: status viewer → group info → chat → list).
+  useBackClose(!!selected, () => setSelected(null));
+  const closeChat = useCallback(() => setSelected(null), []);
 
-  useEffect(() => {
-    const onPop = () => { if (selectedRef.current) setSelected(null); };
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
-  }, [selectedRef]);
-
-  const closeChat = useCallback(() => {
-    if (window.history.state?.chatOpen) window.history.back();
-    else setSelected(null);
+  const openConversation = useCallback((conversation, options = {}) => {
+    setSelected({ id: String(conversation._id), snapshot: conversation, focusMessageId: options.focusMessageId });
+    setView('chats');
   }, []);
-
-  const openConversation = useCallback((conversation) => {
-    select({ id: String(conversation._id), snapshot: conversation });
-  }, [select]);
 
   const openUser = useCallback((person) => {
     const existing = chat.conversations.find(c =>
@@ -72,7 +63,7 @@ export default function Home() {
       openConversation(existing);
       return;
     }
-    select({
+    setSelected({
       temp: {
         _id: `temp_${person._id}`,
         isGroup: false,
@@ -85,26 +76,49 @@ export default function Home() {
       }
     });
     setView('chats');
-  }, [chat.conversations, openConversation, select, user]);
+  }, [chat.conversations, openConversation, user]);
 
   const onConversationCreated = useCallback((conversation) => {
     setSelected({ id: String(conversation._id), snapshot: conversation });
   }, []);
 
+  const onFocusHandled = useCallback(() => {
+    setSelected(s => (s?.focusMessageId ? { ...s, focusMessageId: undefined } : s));
+  }, []);
+
+  // Removed from / left / deleted the open group → close it with an explanation.
+  useEffect(() => {
+    const removal = chat.removal;
+    if (!removal || selected?.id !== removal.conversationId) return;
+    setSelected(null);
+    const reasons = { removed: 'You were removed from this group', deleted: 'This group was deleted', left: 'You left the group' };
+    toast(reasons[removal.reason] || 'This chat is no longer available');
+  }, [chat.removal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // After joining via an invite link, open that group once it is in the list.
+  useEffect(() => {
+    let pending = null;
+    try { pending = sessionStorage.getItem(PENDING_OPEN_KEY); } catch { /* ignore */ }
+    if (!pending || !chat.loaded) return;
+    const conversation = chat.conversations.find(c => String(c._id) === pending);
+    if (conversation) {
+      try { sessionStorage.removeItem(PENDING_OPEN_KEY); } catch { /* ignore */ }
+      openConversation(conversation);
+    }
+  }, [chat.loaded, chat.conversations, openConversation]);
+
   // Tapping a notification opens that chat.
   useEffect(() => {
     const onOpen = (event) => {
       const conversation = chat.conversations.find(c => String(c._id) === String(event.detail));
-      if (conversation) {
-        setView('chats');
-        openConversation(conversation);
-      }
+      if (conversation) openConversation(conversation);
     };
     window.addEventListener(OPEN_CONVERSATION_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_CONVERSATION_EVENT, onOpen);
   }, [chat.conversations, openConversation]);
 
   const other = current ? chat.otherParticipant(current) : null;
+  const chatKey = current?.isGroup ? `g_${current._id}` : other?._id;
 
   return (
     <div className={`app-shell${current ? ' chat-open' : ''}`}>
@@ -116,12 +130,15 @@ export default function Home() {
         onOpenUser={openUser}
       />
       <main className="chat-pane">
-        {current && other ? (
+        {current && (other || current.isGroup) ? (
           <ChatWindow
-            key={other._id}
+            key={chatKey}
             conversation={current}
             onBack={closeChat}
             onConversationCreated={onConversationCreated}
+            onOpenUser={openUser}
+            focusMessageId={selected?.focusMessageId}
+            onFocusHandled={onFocusHandled}
           />
         ) : (
           <Welcome />

@@ -60,7 +60,8 @@ router.post(
 router.get('/:key', async (req, res) => {
   try {
     const media = await Media.findOne({ key: req.params.key }).lean();
-    if (!media) return res.status(404).json({ message: 'Not found' });
+    // Expired status media is gone immediately, even before MongoDB's TTL sweep.
+    if (!media || (media.expiresAt && media.expiresAt <= new Date())) return res.status(404).json({ message: 'Not found' });
 
     const bytes = media.data.buffer || media.data;
     const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -72,7 +73,9 @@ router.get('/:key', async (req, res) => {
       'Content-Type': inline ? media.mimeType : 'application/octet-stream',
       'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${safeName}`,
       'Accept-Ranges': 'bytes',
-      'Cache-Control': 'private, max-age=31536000, immutable',
+      'Cache-Control': media.expiresAt
+        ? `private, max-age=${Math.max(0, Math.floor((new Date(media.expiresAt) - Date.now()) / 1000))}`
+        : 'private, max-age=31536000, immutable',
       'X-Content-Type-Options': 'nosniff',
       'Cross-Origin-Resource-Policy': 'cross-origin'
     });
