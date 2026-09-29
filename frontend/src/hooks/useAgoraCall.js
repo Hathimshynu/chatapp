@@ -155,11 +155,11 @@ export default function useAgoraCall({ onRemoteJoined, onRemoteLeft } = {}) {
         setRemoteCameraOff(true);
       }
     });
+    // Camera state comes only from publish/unpublish above: the SDK can deliver a stale
+    // "mute-video" info event after the track is already published, which would hide live video.
     client.on('user-info-updated', (_, message) => {
       if (message === 'mute-audio') setRemoteMicMuted(true);
       if (message === 'unmute-audio') setRemoteMicMuted(false);
-      if (message === 'mute-video' || message === 'disable-local-video') setRemoteCameraOff(true);
-      if (message === 'unmute-video' || message === 'enable-local-video') setRemoteCameraOff(false);
     });
     client.on('network-quality', (stats) => {
       setNetworkQuality(Math.max(stats.uplinkNetworkQuality || 0, stats.downlinkNetworkQuality || 0));

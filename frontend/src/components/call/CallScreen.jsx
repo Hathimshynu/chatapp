@@ -43,13 +43,24 @@ export default function CallScreen({ call, agora, onAccept, onReject, onEnd, onM
   const [swapped, setSwapped] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const hideTimer = useRef(null);
+  const lastPoke = useRef(0);
 
-  const remoteVisible = isVideo && status === 'active' && agora.remoteVideoTrack && !agora.remoteCameraOff;
+  const active = status === 'active';
+  const remoteVisible = isVideo && active && agora.remoteVideoTrack && !agora.remoteCameraOff;
   const localVisible = isVideo && agora.localVideoTrack && !agora.cameraOff;
-  // While ringing, show your own camera full-screen (like WhatsApp).
-  const mainTrack = remoteVisible ? (swapped && localVisible ? agora.localVideoTrack : agora.remoteVideoTrack) : (localVisible && status !== 'incoming' ? agora.localVideoTrack : null);
+  let mainTrack = null;
+  let pipTrack = null;
+  if (remoteVisible) {
+    mainTrack = swapped && localVisible ? agora.localVideoTrack : agora.remoteVideoTrack;
+    pipTrack = localVisible ? (swapped ? agora.remoteVideoTrack : agora.localVideoTrack) : null;
+  } else if (active) {
+    // Their camera is off: show their avatar, keep your own camera in the corner.
+    pipTrack = localVisible ? agora.localVideoTrack : null;
+  } else if (localVisible && status !== 'incoming') {
+    // While ringing/connecting, show your own camera full-screen (like WhatsApp).
+    mainTrack = agora.localVideoTrack;
+  }
   const mainIsLocal = mainTrack && mainTrack === agora.localVideoTrack;
-  const pipTrack = remoteVisible && localVisible ? (swapped ? agora.remoteVideoTrack : agora.localVideoTrack) : null;
   const pipIsLocal = pipTrack && pipTrack === agora.localVideoTrack;
   const autoHide = isVideo && status === 'active' && !!mainTrack;
 
@@ -88,6 +99,14 @@ export default function CallScreen({ call, agora, onAccept, onReject, onEnd, onM
     <div
       className={`call-screen ${isVideo ? 'is-video' : 'is-audio'} status-${status}${mainTrack ? ' has-video' : ''}${controlsVisible ? '' : ' controls-hidden'}`}
       onClick={pokeControls}
+      onMouseMove={() => {
+        // Desktop: moving the mouse reveals the controls (throttled to avoid re-rendering on every move).
+        const now = Date.now();
+        if (!controlsVisible || now - lastPoke.current > 1000) {
+          lastPoke.current = now;
+          pokeControls();
+        }
+      }}
       role="dialog"
       aria-label={`${isVideo ? 'Video' : 'Voice'} call with ${peer?.name}`}
     >
@@ -127,7 +146,7 @@ export default function CallScreen({ call, agora, onAccept, onReject, onEnd, onM
           </div>
           <h2 className="call-name">{peer?.name}</h2>
           <p className="call-status">{statusText}</p>
-          {isVideo && status === 'active' && agora.remoteCameraOff && (
+          {isVideo && active && agora.remoteCameraOff && (
             <p className="call-chip"><VideoOff size={14} /> Camera is off</p>
           )}
         </div>

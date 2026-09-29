@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { setAuthToken } from '../lib/api';
@@ -172,8 +172,9 @@ export const AuthProvider = ({ children }) => {
     return () => { cancelled = true; };
   }, [user?.token, updateUser]);
 
-  // Any 401 for the active account's token means the session is gone.
-  useEffect(() => {
+  // Any 401 for the active account's token means the session is gone. Registered in a layout
+  // effect so it is in place before any child component starts a request.
+  useLayoutEffect(() => {
     const interceptor = axios.interceptors.response.use(
       response => response,
       error => {
