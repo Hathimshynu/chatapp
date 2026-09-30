@@ -28,7 +28,15 @@ export const GroupCallProvider = ({ children }) => {
   const { socket, connected } = useSocket();
   const { conversations } = useChat();
   const { call: directCall } = useCall();
-  const agora = useAgoraGroup();
+  // Someone's media isn't reaching us → everyone in the call moves to Agora's TCP relay.
+  const onMediaMissing = () => {
+    const current = callRef.current;
+    if (!current?.callId || current.status === 'incoming') return;
+    socket?.emit('groupcall:relay', { callId: current.callId });
+    agora.switchToRelay();
+  };
+  const agora = useAgoraGroup({ onMediaMissing });
+  const { switchToRelay } = agora;
   const [groupCall, setGroupCall] = useState(null);
   const [activeCalls, setActiveCalls] = useState({}); // conversationId -> public call
   const [minimized, setMinimized] = useState(false);
@@ -201,6 +209,10 @@ export const GroupCallProvider = ({ children }) => {
     if (callRef.current?.callId !== callId) return;
     finish(callRef.current.status === 'incoming' ? null : END_TEXT[reason] || END_TEXT.ended);
   }, [finish]));
+
+  useSocketEvent('groupcall:relay', useCallback(({ callId }) => {
+    if (callRef.current?.callId === callId && callRef.current.status !== 'incoming') switchToRelay();
+  }, [switchToRelay]));
 
   useSocketEvent('groupcall:handled', useCallback(({ callId }) => {
     if (callRef.current?.callId === callId && callRef.current.status === 'incoming') {
