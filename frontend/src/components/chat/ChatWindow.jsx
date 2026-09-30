@@ -44,7 +44,12 @@ const reconcile = (list, incoming) => {
   return list.filter(m => m === existing || !matches(m)).map(m => (m === existing ? merged : m));
 };
 
-const mergeLists = (current, fresh) => fresh.reduce(reconcile, current).sort(byTime);
+const mergeLists = (current, fresh = []) => fresh.reduce(reconcile, current).sort(byTime);
+
+// A page of messages. Older servers answered with a bare array; never crash on either shape.
+const pageOf = (data) => (Array.isArray(data)
+  ? { messages: data, hasMore: false }
+  : { messages: Array.isArray(data?.messages) ? data.messages : [], hasMore: !!data?.hasMore });
 
 // Worth retrying automatically once we're back online (no response, server error or rate limit).
 const isRetryable = (error) => !error?.response || error.response.status >= 500 || error.response.status === 429;
@@ -146,8 +151,9 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   const fetchLatest = useCallback(async ({ merge = false } = {}) => {
     if (isTempRef.current) return;
     const { data } = await axios.get(`/api/messages/${convIdRef.current}`, { params: { limit: PAGE_SIZE } });
-    setMessages(prev => (merge ? mergeLists(prev, data.messages) : mergeLists(prev.filter(m => m.status), data.messages)));
-    if (!merge) setHasMore(data.hasMore);
+    const page = pageOf(data);
+    setMessages(prev => (merge ? mergeLists(prev, page.messages) : mergeLists(prev.filter(m => m.status), page.messages)));
+    if (!merge) setHasMore(page.hasMore);
   }, []);
 
   useEffect(() => {
@@ -202,8 +208,9 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
       const el = listRef.current;
       prependRef.current = el ? { height: el.scrollHeight, top: el.scrollTop } : null;
       scrollModeRef.current = 'prepend';
-      setMessages(prev => mergeLists(prev, data.messages));
-      setHasMore(data.hasMore);
+      const page = pageOf(data);
+      setMessages(prev => mergeLists(prev, page.messages));
+      setHasMore(page.hasMore);
     } catch {
       toast.error('Could not load older messages');
     } finally {
@@ -368,7 +375,8 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
       const data = await postMessage({ ...body, clientId });
       retryBodies.current.delete(clientId);
       scrollModeRef.current = null;
-      setMessages(prev => reconcile(prev, data.message));
+      const sent = data?.message || (data?._id ? data : null); // older servers returned the message itself
+      if (sent) setMessages(prev => reconcile(prev, sent));
       playSentSound();
     } catch (error) {
       const autoRetry = isRetryable(error);

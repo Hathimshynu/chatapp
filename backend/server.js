@@ -61,6 +61,18 @@ app.use('/api/search', require('./routes/search'));
 app.use('/api/push', require('./routes/push'));
 app.use('/api/friends', require('./routes/friends'));
 
+// Health/version check: shows which commit is live (Render sets RENDER_GIT_COMMIT).
+// Open https://<your-backend>/api/health after a deploy to confirm the new version is running.
+const API_VERSION = 5; // bump when the frontend starts relying on new endpoints
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    apiVersion: API_VERSION,
+    commit: (process.env.RENDER_GIT_COMMIT || process.env.COMMIT_SHA || '').slice(0, 7) || null,
+    features: ['groups', 'status', 'search', 'push', 'group-calls', 'archive', 'block', 'privacy', 'friends', 'call-relay']
+  });
+});
+
 // Payload too large / bad JSON → clean JSON errors instead of HTML stack traces.
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);

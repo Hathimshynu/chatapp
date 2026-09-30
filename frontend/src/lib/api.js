@@ -21,8 +21,15 @@ export const mediaUrl = (url) => {
   return url.startsWith('/api/') ? `${API_URL}${url}` : url;
 };
 
-export const errorMessage = (error, fallback = 'Something went wrong') =>
-  error?.response?.data?.message || (error?.message === 'Network Error' ? 'No connection. Check your internet.' : fallback);
+// A 404 with an HTML body means the route doesn't exist at all: the backend is an
+// older version than this app (e.g. the server wasn't redeployed).
+export const isMissingEndpoint = (error) =>
+  error?.response?.status === 404 && typeof error.response.data === 'string' && /<html|<!doctype/i.test(error.response.data);
+
+export const errorMessage = (error, fallback = 'Something went wrong') => {
+  if (isMissingEndpoint(error)) return 'This feature needs a server update. Please try again later.';
+  return error?.response?.data?.message || (error?.message === 'Network Error' ? 'No connection. Check your internet.' : fallback);
+};
 
 export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 
