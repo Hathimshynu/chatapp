@@ -7,6 +7,9 @@ const { emitToUsers, escapeRegex, isOnline } = require('../utils/realtime');
 const { viewerContext, maskUser, canSeeOnline, contactIdsOf, blockedWith } = require('../utils/privacy');
 const { broadcastPresence } = require('../services/presence');
 
+// Lazy: the friend controller is loaded on first use.
+const friends = () => require('./friendController');
+
 const PUBLIC_FIELDS = 'name email avatar status lastSeen privacy';
 const MAX_INLINE_AVATAR = 3 * 1024 * 1024;
 const VISIBILITY = ['everyone', 'contacts', 'nobody'];
@@ -23,8 +26,8 @@ const searchUsers = async (req, res) => {
       $or: [{ name: pattern }, { email: pattern }]
     }).select(PUBLIC_FIELDS).limit(20).lean();
 
-    const ctx = await viewerContext(req.user._id);
-    res.json(users.map(u => maskUser(u, ctx)));
+    const [ctx, relations] = await Promise.all([viewerContext(req.user._id), friends().relationsFor(req.user._id, users.map(u => u._id))]);
+    res.json(users.map(u => ({ ...maskUser(u, ctx), friendship: relations[String(u._id)] || { state: 'none' } })));
   } catch (error) {
     serverError(res, error);
   }
@@ -42,11 +45,17 @@ const getUser = async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid user' });
     const user = await User.findById(req.params.id).select(PUBLIC_FIELDS).lean();
     if (!user) return res.status(404).json({ message: 'User not found' });
-    const ctx = await viewerContext(req.user._id);
+    const [ctx, relations, mutualFriends] = await Promise.all([
+      viewerContext(req.user._id),
+      friends().relationsFor(req.user._id, [user._id]),
+      String(user._id) === String(req.user._id) ? 0 : friends().mutualCount(req.user._id, user._id)
+    ]);
     res.json({
       ...maskUser(user, ctx),
       online: isOnline(user._id) && canSeeOnline(user, ctx),
-      blockedByMe: ctx.iBlocked.has(String(user._id))
+      blockedByMe: ctx.iBlocked.has(String(user._id)),
+      friendship: relations[String(user._id)] || { state: String(user._id) === String(req.user._id) ? 'self' : 'none' },
+      mutualFriends
     });
   } catch (error) {
     serverError(res, error);
@@ -171,7 +180,10 @@ const setBlocked = (block) => async (req, res) => {
     if (target === me) return res.status(400).json({ message: "You can't block yourself" });
     if (!(await User.exists({ _id: target }))) return res.status(404).json({ message: 'User not found' });
 
-    if (block) await Block.updateOne({ blocker: me, blocked: target }, { $setOnInsert: { blocker: me, blocked: target } }, { upsert: true });
+    if (block) {
+      await Block.updateOne({ blocker: me, blocked: target }, { $setOnInsert: { blocker: me, blocked: target } }, { upsert: true });
+      await friends().removeBetween(me, target); // blocking ends a friendship / pending request
+    }
     else await Block.deleteOne({ blocker: me, blocked: target });
 
     // My other tabs update their UI; the other person is not told.

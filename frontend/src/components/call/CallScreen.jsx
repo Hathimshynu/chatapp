@@ -46,7 +46,7 @@ export default function CallScreen({ call, agora, onAccept, onReject, onEnd, onM
   const lastPoke = useRef(0);
 
   const active = status === 'active';
-  const remoteVisible = isVideo && active && agora.remoteVideoTrack && !agora.remoteCameraOff;
+  const remoteVisible = isVideo && active && agora.remoteVideoTrack && !agora.remoteCameraOff && !agora.remoteVideoStalled;
   const localVisible = isVideo && agora.localVideoTrack && !agora.cameraOff;
   let mainTrack = null;
   let pipTrack = null;
@@ -148,6 +148,9 @@ export default function CallScreen({ call, agora, onAccept, onReject, onEnd, onM
           <p className="call-status">{statusText}</p>
           {isVideo && active && agora.remoteCameraOff && (
             <p className="call-chip"><VideoOff size={14} /> Camera is off</p>
+          )}
+          {isVideo && active && !agora.remoteCameraOff && agora.remoteVideoStalled && (
+            <p className="call-chip is-warn" role="status"><VideoOff size={14} /> Video paused — poor connection</p>
           )}
         </div>
       )}

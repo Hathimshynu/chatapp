@@ -8,10 +8,15 @@ import IncomingCallBanner from '../components/call/IncomingCallBanner';
 import MinimizedCall from '../components/call/MinimizedCall';
 import { playEndTone, startRingtone } from '../lib/sounds';
 import { showNotification } from '../lib/notify';
+import { callsUnavailableReason } from '../lib/media';
 
 const CallContext = createContext(null);
 
 const ENDED_SCREEN_MS = 1800;
+// If the other person drops out of the media channel (network blip, or reconnecting
+// through the relay), wait this long for them to come back before ending the call.
+// Hanging up is instant: it goes through the server ("call:end").
+const REMOTE_GONE_GRACE_MS = 10000;
 
 const describeEnd = ({ status, endedBy }, myId, direction) => {
   if (status === 'completed') return 'Call ended';
@@ -66,15 +71,22 @@ export const CallProvider = ({ children }) => {
   }, [stopRing, updateCall]);
 
   const onRemoteLeftRef = useRef(() => {});
+  const onMediaMissingRef = useRef(() => {});
+  const remoteGoneTimer = useRef(null);
   const agora = useAgoraCall({
-    onRemoteJoined: markActive,
-    onRemoteLeft: (reason) => onRemoteLeftRef.current(reason)
+    onRemoteJoined: () => {
+      clearTimeout(remoteGoneTimer.current);
+      markActive();
+    },
+    onRemoteLeft: (reason) => onRemoteLeftRef.current(reason),
+    onMediaMissing: () => onMediaMissingRef.current()
   });
-  const { leave } = agora;
+  const { leave, switchToRelay } = agora;
 
   const finish = useCallback((reason, { notifyServer = false, showEndedScreen = true } = {}) => {
     const current = callRef.current;
     if (!current || current.status === 'ended') return;
+    clearTimeout(remoteGoneTimer.current);
     stopRing();
     releaseWakeLock();
     if (notifyServer && current.callId) socket?.emit('call:end', { callId: current.callId });
@@ -101,11 +113,23 @@ export const CallProvider = ({ children }) => {
   useLayoutEffect(() => {
     onRemoteLeftRef.current = () => {
       const current = callRef.current;
-      if (current && (current.status === 'active' || current.status === 'connecting')) {
-        finish('Call ended', { notifyServer: true });
-      }
+      if (!current || (current.status !== 'active' && current.status !== 'connecting')) return;
+      clearTimeout(remoteGoneTimer.current);
+      remoteGoneTimer.current = setTimeout(() => {
+        const now = callRef.current;
+        if (now?.callId === current.callId && (now.status === 'active' || now.status === 'connecting')) {
+          finish('Call ended', { notifyServer: true });
+        }
+      }, REMOTE_GONE_GRACE_MS);
     };
-  }, [finish]);
+    // Their media isn't reaching us: move both sides to Agora's TCP relay.
+    onMediaMissingRef.current = () => {
+      const current = callRef.current;
+      if (!current?.callId || current.status === 'ended') return;
+      socket?.emit('call:relay', { callId: current.callId });
+      switchToRelay();
+    };
+  }, [finish, socket, switchToRelay]);
 
   // ── Outgoing ─────────────────────────────────────────────────────
   const startCall = useCallback((peer, type = 'audio') => {
@@ -117,6 +141,11 @@ export const CallProvider = ({ children }) => {
     }
     if (!socket?.connected) {
       toast.error('You are offline. Check your connection.');
+      return;
+    }
+    const unavailable = callsUnavailableReason();
+    if (unavailable) {
+      toast.error(unavailable, { duration: 6000 });
       return;
     }
     clearTimeout(clearTimerRef.current);
@@ -157,6 +186,11 @@ export const CallProvider = ({ children }) => {
   const acceptCall = useCallback(() => {
     const current = callRef.current;
     if (!current || current.status !== 'incoming') return;
+    const unavailable = callsUnavailableReason();
+    if (unavailable) {
+      toast.error(unavailable, { duration: 6000 });
+      return; // keep ringing so it can still be answered on another device
+    }
     stopRing();
     updateCall({ status: 'connecting' });
     socket.emit('call:accept', { callId: current.callId }, async (response = {}) => {
@@ -232,11 +266,16 @@ export const CallProvider = ({ children }) => {
   useSocketEvent('call:accepted', onAccepted);
   useSocketEvent('call:ended', onEnded);
   useSocketEvent('call:handled', onHandledElsewhere);
+  // The other side asked to reconnect through the relay.
+  useSocketEvent('call:relay', useCallback(({ callId }) => {
+    if (callRef.current?.callId === callId && callRef.current.status !== 'ended') switchToRelay();
+  }, [switchToRelay]));
 
   useEffect(() => () => {
     stopRing();
     releaseWakeLock();
     clearTimeout(clearTimerRef.current);
+    clearTimeout(remoteGoneTimer.current);
   }, [stopRing]);
 
   const value = useMemo(() => ({ startCall, call }), [startCall, call]);

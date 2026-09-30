@@ -486,3 +486,4 @@
   background: linear-gradient(135deg, #34d399, #16a34a); box-shadow: 0 6px 18px rgba(22, 163, 74, 0.35);
 }
 .join-call-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; font-size: 12px; line-height: 20px; text-align: center; background: rgba(255, 255, 255, 0.25); }
+.contact-actions button:disabled { opacity: 0.45; cursor: not-allowed; }

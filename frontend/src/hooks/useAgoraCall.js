@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import useLatest from './useLatest';
+import { MEDIA_CHECK_MS, RELAY_PROXY_MODE, relayAllowed, rememberRelay, startWithRelay } from '../lib/callTransport';
 
 // HD: 1280×720 @ 30fps. Agora adapts the bitrate between these bounds to the
 // network, and "detail" keeps the picture sharp rather than dropping resolution.
@@ -42,19 +43,29 @@ export const permissionMessage = (error, type) => {
   return error?.response?.data?.message || 'Could not connect the call.';
 };
 
+// Small second stream (≈200 kbps) that viewers on poor networks are switched to
+// automatically, before dropping to audio-only — instead of a frozen picture.
+const LOW_STREAM = { width: 320, height: 180, framerate: 15, bitrate: 200 };
+const STALL_CHECK_MS = 2000;
+
 const fetchToken = async (channelName) => {
   const { data } = await axios.get('/api/calls/token', { params: { channel: channelName } });
   return data;
 };
 
-export default function useAgoraCall({ onRemoteJoined, onRemoteLeft } = {}) {
+export default function useAgoraCall({ onRemoteJoined, onRemoteLeft, onMediaMissing } = {}) {
   const clientRef = useRef(null);
   const audioTrackRef = useRef(null);
   const videoTrackRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const speakerOffRef = useRef(false);
   const generationRef = useRef(0); // bumped by leave() so late async work can bail out
-  const callbacks = useLatest({ onRemoteJoined, onRemoteLeft });
+  const callbacks = useLatest({ onRemoteJoined, onRemoteLeft, onMediaMissing });
+  const channelRef = useRef(null);
+  const typeRef = useRef('audio');
+  const relayRef = useRef(false); // this call goes through Agora's TCP relay
+  const mediaCheckRef = useRef(null);
+  const [relayed, setRelayed] = useState(false);
 
   const [localVideoTrack, setLocalVideoTrack] = useState(null);
   const [remoteVideoTrack, setRemoteVideoTrack] = useState(null);
@@ -66,6 +77,9 @@ export default function useAgoraCall({ onRemoteJoined, onRemoteLeft } = {}) {
   const [networkQuality, setNetworkQuality] = useState(0); // 0 unknown, 1 best … 6 down
   const [reconnecting, setReconnecting] = useState(false);
   const [facingMode, setFacingMode] = useState('user');
+  // Remote video published but no frames arriving (bad network) → show avatar + notice.
+  const [remoteVideoStalled, setRemoteVideoStalled] = useState(false);
+  const stallTimerRef = useRef(null);
 
   const resetState = () => {
     setLocalVideoTrack(null);
@@ -78,6 +92,10 @@ export default function useAgoraCall({ onRemoteJoined, onRemoteLeft } = {}) {
     setNetworkQuality(0);
     setReconnecting(false);
     setFacingMode('user');
+    setRemoteVideoStalled(false);
+    clearInterval(stallTimerRef.current);
+    clearTimeout(mediaCheckRef.current);
+    setRelayed(false);
     speakerOffRef.current = false;
   };
 
@@ -124,20 +142,38 @@ export default function useAgoraCall({ onRemoteJoined, onRemoteLeft } = {}) {
     }
   }, []);
 
-  const join = useCallback(async ({ channelName, type }) => {
-    if (clientRef.current) return;
-    const AgoraRTC = await loadAgora();
-    const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
-    clientRef.current = client;
+  // Mark the remote video as stalled when no frames arrive for two checks in a row.
+  const watchRemoteVideo = (client, uid) => {
+    clearInterval(stallTimerRef.current);
+    let idle = 0;
+    stallTimerRef.current = setInterval(() => {
+      if (clientRef.current !== client) {
+        clearInterval(stallTimerRef.current);
+        return;
+      }
+      const stats = client.getRemoteVideoStats?.()[uid];
+      if (!stats) return;
+      const receiving = (stats.receiveFrameRate || 0) > 0 || (stats.renderFrameRate || 0) > 0;
+      idle = receiving ? 0 : idle + 1;
+      setRemoteVideoStalled(idle >= 2);
+    }, STALL_CHECK_MS);
+  };
 
-    client.on('user-joined', () => callbacks.current.onRemoteJoined?.());
+  // Wire a client's events. Kept separate so a relay reconnect can reuse it.
+  const attach = (client, channelName) => {
+    client.on('user-joined', () => {
+      callbacks.current.onRemoteJoined?.();
+      startMediaCheck(client);
+    });
     client.on('user-left', (_, reason) => callbacks.current.onRemoteLeft?.(reason));
     client.on('user-published', async (remoteUser, mediaType) => {
       try {
         await client.subscribe(remoteUser, mediaType);
-      } catch {
+      } catch (error) {
+        console.warn(`Call: could not receive ${mediaType}`, error?.code || error?.message);
         return;
       }
+      if (clientRef.current !== client) return;
       if (mediaType === 'audio' && remoteUser.audioTrack) {
         remoteAudioRef.current = remoteUser.audioTrack;
         remoteUser.audioTrack.setVolume(speakerOffRef.current ? 0 : 100);
@@ -147,14 +183,20 @@ export default function useAgoraCall({ onRemoteJoined, onRemoteLeft } = {}) {
       if (mediaType === 'video' && remoteUser.videoTrack) {
         setRemoteVideoTrack(remoteUser.videoTrack);
         setRemoteCameraOff(false);
+        // Poor downlink: switch to their small stream, then audio-only (Agora recovers automatically).
+        try { Promise.resolve(client.setStreamFallbackOption(remoteUser.uid, 2)).catch(() => {}); } catch { /* older SDK */ }
+        watchRemoteVideo(client, remoteUser.uid);
       }
     });
     client.on('user-unpublished', (_, mediaType) => {
       if (mediaType === 'video') {
         setRemoteVideoTrack(null);
         setRemoteCameraOff(true);
+        setRemoteVideoStalled(false);
+        clearInterval(stallTimerRef.current);
       }
     });
+    client.on('stream-fallback', (_, type) => setRemoteVideoStalled(type === 'fallback'));
     // Camera state comes only from publish/unpublish above: the SDK can deliver a stale
     // "mute-video" info event after the track is already published, which would hide live video.
     client.on('user-info-updated', (_, message) => {
@@ -173,36 +215,117 @@ export default function useAgoraCall({ onRemoteJoined, onRemoteLeft } = {}) {
         // the call will drop when the token expires
       }
     });
+  };
 
+  // A few seconds after the other person joins, check their media actually arrives.
+  // If not, this network path is dropping it → ask to switch both sides to the relay.
+  const startMediaCheck = (client) => {
+    clearTimeout(mediaCheckRef.current);
+    if (relayRef.current || !relayAllowed()) return;
+    mediaCheckRef.current = setTimeout(() => {
+      if (clientRef.current !== client || relayRef.current) return;
+      const remote = client.remoteUsers[0];
+      if (!remote) return;
+      const audioBytes = client.getRemoteAudioStats?.()[remote.uid]?.receiveBytes || 0;
+      const videoBytes = client.getRemoteVideoStats?.()[remote.uid]?.receiveBytes || 0;
+      const audioOk = remote.hasAudio && audioBytes > 0;
+      const videoOk = typeRef.current !== 'video' || (remote.hasVideo && videoBytes > 0);
+      if (!audioOk || !videoOk) callbacks.current.onMediaMissing?.();
+    }, MEDIA_CHECK_MS);
+  };
+
+  // Create a client (direct or via the relay), join and publish the local tracks.
+  const connect = async (channelName, credentials) => {
+    const AgoraRTC = await loadAgora();
+    const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
+    clientRef.current = client;
+    if (import.meta.env.DEV) window.__agoraCall = client; // debugging aid in development only
+    if (relayRef.current) client.startProxyServer(RELAY_PROXY_MODE);
+    attach(client, channelName);
+    const { appId, token } = credentials || await fetchToken(channelName);
+    if (clientRef.current !== client) return;
+    await client.join(appId, channelName, token, null);
+    if (clientRef.current !== client) {
+      await client.leave();
+      return;
+    }
+    if (videoTrackRef.current) {
+      try {
+        client.setLowStreamParameter(LOW_STREAM);
+        await client.enableDualStream();
+      } catch {
+        // dual stream unsupported on this browser — the single HD stream still works
+      }
+    }
+    const tracks = [audioTrackRef.current, videoTrackRef.current].filter(Boolean);
+    if (tracks.length) await client.publish(tracks);
+    if (client.remoteUsers.length) startMediaCheck(client); // they were already in the channel
+  };
+
+  const join = useCallback(async ({ channelName, type }) => {
+    if (clientRef.current) return;
+    channelRef.current = channelName;
+    typeRef.current = type;
+    relayRef.current = startWithRelay();
+    setRelayed(relayRef.current);
     try {
-      const [{ appId, token }] = await Promise.all([
+      const [credentials] = await Promise.all([
         fetchToken(channelName),
         audioTrackRef.current ? Promise.resolve() : prepare(type)
       ]);
-      if (clientRef.current !== client) return; // hung up meanwhile
-      await client.join(appId, channelName, token, null);
-      if (clientRef.current !== client) {
-        await client.leave();
-        return;
-      }
-      const tracks = [audioTrackRef.current, videoTrackRef.current].filter(Boolean);
-      if (tracks.length) await client.publish(tracks);
+      if (channelRef.current !== channelName) return; // hung up meanwhile
+      await connect(channelName, credentials);
     } catch (error) {
-      client.removeAllListeners();
-      client.leave().catch(() => {});
+      const client = clientRef.current;
+      client?.removeAllListeners();
+      client?.leave().catch(() => {});
       // Hung up while connecting: leave() already cleaned up, nothing to report.
-      if (clientRef.current !== client || error.message === 'cancelled') return;
+      if (channelRef.current !== channelName || error.message === 'cancelled') return;
       clientRef.current = null;
+      channelRef.current = null;
       closeLocalTracks();
       resetState();
       throw new Error(error.message?.startsWith('Allow') || error.message?.includes('unavailable')
         ? error.message
         : permissionMessage(error, type));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prepare, callbacks]);
+
+  // Reconnect this call through Agora's TCP/443 relay, keeping the same camera/mic.
+  const switchToRelay = useCallback(async () => {
+    const old = clientRef.current;
+    const channelName = channelRef.current;
+    if (!old || !channelName || relayRef.current || !relayAllowed()) return false;
+    relayRef.current = true;
+    setRelayed(true);
+    rememberRelay();
+    clearTimeout(mediaCheckRef.current);
+    clearInterval(stallTimerRef.current);
+    old.removeAllListeners();
+    clientRef.current = null;
+    remoteAudioRef.current = null;
+    setRemoteVideoTrack(null);
+    setRemoteVideoStalled(false);
+    setReconnecting(true);
+    await old.leave().catch(() => {});
+    if (channelRef.current !== channelName) return false; // hung up meanwhile
+    try {
+      await connect(channelName);
+      setReconnecting(false);
+      return true;
+    } catch (error) {
+      console.warn('Call: relay reconnect failed', error?.code || error?.message);
+      setReconnecting(false);
+      return false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const leave = useCallback(async () => {
     generationRef.current += 1;
+    channelRef.current = null;
+    relayRef.current = false;
     const client = clientRef.current;
     clientRef.current = null;
     closeLocalTracks();
@@ -268,6 +391,9 @@ export default function useAgoraCall({ onRemoteJoined, onRemoteLeft } = {}) {
     prepare,
     join,
     leave,
+    switchToRelay,
+    relayed,
+    remoteVideoStalled,
     toggleMic,
     toggleCamera,
     toggleSpeaker,

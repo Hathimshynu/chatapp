@@ -158,6 +158,15 @@ const registerCallHandlers = (io, socket) => {
     if (!call || (call.callerId !== me && call.receiverId !== me)) return;
     finishCall(callId, 'missed', me);
   });
+
+  // Media isn't getting through on the direct path: ask the other participant to
+  // reconnect through Agora's TCP relay too. Only for a live call you are in.
+  socket.on('call:relay', ({ callId } = {}) => {
+    const call = calls.get(callId);
+    if (!call || (call.callerId !== me && call.receiverId !== me)) return;
+    if (!allowSocketEvent('call-relay', me, 5, 60 * 1000)) return;
+    emitToUsers([call.callerId === me ? call.receiverId : call.callerId], 'call:relay', { callId });
+  });
 };
 
 const isInDirectCall = (userId) => callByUser.has(String(userId));

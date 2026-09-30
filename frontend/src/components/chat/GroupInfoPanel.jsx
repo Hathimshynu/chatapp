@@ -8,6 +8,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import { useSocket } from '../../context/SocketContext';
+import { useProfile } from '../../context/ProfileContext';
 import Avatar from '../common/Avatar';
 import Dialog from '../common/Dialog';
 import ConfirmDialog from '../common/ConfirmDialog';
@@ -58,6 +59,7 @@ function EditTextDialog({ title, initial, maxLength, multiline, onSave, onClose 
 }
 
 export default function GroupInfoPanel({ conversation, onClose, onOpenMedia, onMessageUser }) {
+  const { openProfile } = useProfile();
   const { user } = useAuth();
   const { patchConversation } = useChat();
   const { isOnline } = useSocket();
@@ -230,7 +232,7 @@ export default function GroupInfoPanel({ conversation, onClose, onOpenMedia, onM
             const self = id === me;
             return (
               <div key={id} className="member-row">
-                <button type="button" className="member-main" disabled={self} onClick={() => onMessageUser(member)}>
+                <button type="button" className="member-main" disabled={self} onClick={() => openProfile(member)} aria-label={self ? undefined : `${member.name} — view profile`}>
                   <Avatar user={member} size={42} online={!self && isOnline(id)} />
                   <span className="member-info">
                     <strong>{self ? 'You' : member.name}</strong>

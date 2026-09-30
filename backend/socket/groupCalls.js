@@ -184,6 +184,14 @@ const registerGroupCallHandlers = (io, socket) => {
   });
 
   socket.on('groupcall:leave', ({ callId } = {}) => leaveCall(callId, me));
+
+  // Media isn't getting through directly: everyone in the call reconnects via Agora's TCP relay.
+  socket.on('groupcall:relay', ({ callId } = {}) => {
+    const call = calls.get(callId);
+    if (!call || !call.participants.has(me)) return;
+    if (!allowSocketEvent('groupcall-relay', me, 5, 60 * 1000)) return;
+    emitToUsers([...call.participants.keys()].filter(id => id !== me), 'groupcall:relay', { callId });
+  });
 };
 
 // For clients that load after a call started: active calls in my groups.

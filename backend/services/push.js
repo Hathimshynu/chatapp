@@ -103,4 +103,15 @@ const notifyNewMessage = async (conversation, message, senderId) => {
   }
 };
 
-module.exports = { isConfigured, publicKey, notifyNewMessage };
+// One-off notification to a single user (e.g. a friend request) when none of their devices is open.
+const notifyUser = async (userId, { title, body, tag }) => {
+  if (!init() || isOnline(userId)) return;
+  try {
+    const subscriptions = await PushSubscription.find({ user: userId }).lean();
+    await Promise.all(subscriptions.map(sub => send(sub, { title, body, tag, userId: String(userId) })));
+  } catch (error) {
+    console.error('notifyUser:', error.message);
+  }
+};
+
+module.exports = { isConfigured, publicKey, notifyNewMessage, notifyUser };

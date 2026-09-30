@@ -59,6 +59,7 @@ app.use('/api/groups', require('./routes/groups'));
 app.use('/api/status', require('./routes/status'));
 app.use('/api/search', require('./routes/search'));
 app.use('/api/push', require('./routes/push'));
+app.use('/api/friends', require('./routes/friends'));
 
 // Payload too large / bad JSON → clean JSON errors instead of HTML stack traces.
 app.use((err, req, res, next) => {

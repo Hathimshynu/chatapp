@@ -9,6 +9,9 @@ import { formatListTime, messagePreview } from '../../lib/format';
 import Avatar from '../common/Avatar';
 import ConversationItem from './ConversationItem';
 import { useBackClose } from '../../lib/backStack';
+import { useFriends } from '../../context/FriendsContext';
+
+const RELATION_LABEL = { friends: 'Friend', outgoing: 'Request sent', incoming: 'Wants to be friends' };
 
 const NewGroupDialog = lazy(() => import('./NewGroupDialog'));
 
@@ -33,6 +36,7 @@ function Highlight({ text, query }) {
 export default function ChatList({ activeConversationId, onOpenConversation, onOpenUser }) {
   const { user } = useAuth();
   const { conversations, loaded, typing, otherParticipant, archivedUnread } = useChat();
+  const { relationOf } = useFriends();
   const { isOnline, connected } = useSocket();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
@@ -241,7 +245,12 @@ export default function ChatList({ activeConversationId, onOpenConversation, onO
                   <button key={person._id} type="button" className="conv-item" onClick={() => { setQuery(''); onOpenUser(person); }}>
                     <Avatar user={person} size={52} online={isOnline(person._id)} />
                     <span className="conv-body">
-                      <span className="conv-row"><span className="conv-name"><Highlight text={person.name} query={trimmed} /></span></span>
+                      <span className="conv-row">
+                        <span className="conv-name"><Highlight text={person.name} query={trimmed} /></span>
+                        {RELATION_LABEL[relationOf(person._id).state] && (
+                          <span className="relation-chip">{RELATION_LABEL[relationOf(person._id).state]}</span>
+                        )}
+                      </span>
                       <span className="conv-row"><span className="conv-preview"><span className="conv-preview-text">{person.status || person.email}</span></span></span>
                     </span>
                   </button>

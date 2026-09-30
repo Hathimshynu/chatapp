@@ -7,6 +7,7 @@ import { ChatProvider } from './context/ChatContext';
 import { CallProvider } from './context/CallContext';
 import { GroupCallProvider } from './context/GroupCallContext';
 import { StatusProvider } from './context/StatusContext';
+import { FriendsProvider } from './context/FriendsContext';
 import { safeNextPath } from './lib/api';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -20,11 +21,13 @@ function Messenger() {
     <SocketProvider key={user._id}>
       <ChatProvider>
         <StatusProvider>
-          <CallProvider>
-            <GroupCallProvider>
-              <Home />
-            </GroupCallProvider>
-          </CallProvider>
+          <FriendsProvider>
+            <CallProvider>
+              <GroupCallProvider>
+                <Home />
+              </GroupCallProvider>
+            </CallProvider>
+          </FriendsProvider>
         </StatusProvider>
       </ChatProvider>
     </SocketProvider>

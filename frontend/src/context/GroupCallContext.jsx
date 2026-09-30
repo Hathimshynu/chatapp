@@ -9,6 +9,7 @@ import IncomingCallBanner from '../components/call/IncomingCallBanner';
 import MinimizedCall from '../components/call/MinimizedCall';
 import { playEndTone, startRingtone } from '../lib/sounds';
 import { showNotification } from '../lib/notify';
+import { callsUnavailableReason } from '../lib/media';
 
 const GroupCallScreen = lazy(() => import('../components/call/GroupCallScreen'));
 
@@ -96,6 +97,11 @@ export const GroupCallProvider = ({ children }) => {
     }
     if (!socket?.connected) {
       toast.error('You are offline. Check your connection.');
+      return true;
+    }
+    const unavailable = callsUnavailableReason();
+    if (unavailable) {
+      toast.error(unavailable, { duration: 6000 });
       return true;
     }
     return false;

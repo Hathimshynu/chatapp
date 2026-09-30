@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Archive, Ban, Bell, Eraser, Mail, Phone, Pin, Play, Video, X } from 'lucide-react';
+import { Archive, Ban, Bell, Eraser, Mail, Phone, Pin, Play, Users, Video, X } from 'lucide-react';
 import { useSocket } from '../../context/SocketContext';
 import Avatar from '../common/Avatar';
+import FriendButton from '../friends/FriendButton';
 import { mediaUrl } from '../../lib/api';
 import { formatLastSeen } from '../../lib/format';
 
@@ -48,6 +49,10 @@ export default function ContactPanel({
           <Avatar user={person} size={132} ring />
           <h3>{person.name}</h3>
           <p className={online ? 'is-online' : ''}>{online ? 'online' : formatLastSeen(other._id in lastSeen ? lastSeen[other._id] : person.lastSeen)}</p>
+          {!blocked && <div className="profile-friend"><FriendButton user={person} size="md" showUnfriend /></div>}
+          {profile?.mutualFriends > 0 && (
+            <p className="profile-mutual"><Users size={14} /> {profile.mutualFriends} mutual friend{profile.mutualFriends > 1 ? 's' : ''}</p>
+          )}
           <div className="contact-actions">
             <button type="button" onClick={() => onCall('audio')} disabled={blocked}><Phone size={20} /><span>Voice</span></button>
             <button type="button" onClick={() => onCall('video')} disabled={blocked}><Video size={20} /><span>Video</span></button>

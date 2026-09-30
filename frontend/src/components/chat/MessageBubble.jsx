@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import Ticks from '../common/Ticks';
 import Avatar from '../common/Avatar';
+import { useProfile } from '../../context/ProfileContext';
 import AudioPlayer from './AudioPlayer';
 import { mediaUrl } from '../../lib/api';
 import { messageMedia } from '../../lib/messages';
@@ -79,6 +80,7 @@ function MessageBubble({
   message, mine, myId, grouped, highlighted, sender, isGroup, showSender, senderColor, peerName,
   onOpenMenu, onReply, onJumpTo, onOpenMedia, onRetry, onToggleReaction, onCallBack, onMediaLoad
 }) {
+  const { openProfile } = useProfile();
   const rowRef = useRef(null);
   const touch = useRef(null);
   const type = message.messageType || 'text';
@@ -253,8 +255,15 @@ function MessageBubble({
       className={`msg-row ${mine ? 'is-mine' : 'is-theirs'}${grouped ? ' is-grouped' : ''}${groupAvatar ? ' has-avatar' : ''}`}
     >
       {groupAvatar && (
-        <span className="msg-avatar" aria-hidden="true">
-          {showSender && <Avatar user={sender} name={message.sender?.name} size={30} />}
+        <span className="msg-avatar">
+          {showSender && (
+            <Avatar
+              user={sender}
+              name={message.sender?.name}
+              size={30}
+              onClick={() => openProfile(sender?._id ? sender : message.sender)}
+            />
+          )}
         </span>
       )}
       <div

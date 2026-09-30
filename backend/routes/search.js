@@ -8,6 +8,7 @@ const { escapeRegex } = require('../utils/realtime');
 const { scopeFor } = require('../controllers/messageController');
 const { rateLimit, LIMITS } = require('../utils/rateLimit');
 const { viewerContext, maskUser } = require('../utils/privacy');
+const { relationsFor } = require('../controllers/friendController');
 
 const router = express.Router();
 router.use(protect);
@@ -63,9 +64,9 @@ router.get('/', rateLimit(LIMITS.search), async (req, res) => {
       .limit(30)
       .lean() : [];
 
-    const ctx = await viewerContext(me);
+    const [ctx, relations] = await Promise.all([viewerContext(me), relationsFor(me, users.map(u => u._id))]);
     res.json({
-      users: users.map(u => maskUser(u, ctx)),
+      users: users.map(u => ({ ...maskUser(u, ctx), friendship: relations[String(u._id)] || { state: 'none' } })),
       groups,
       messages
     });

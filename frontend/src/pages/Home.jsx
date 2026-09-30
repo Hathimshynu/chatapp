@@ -5,6 +5,7 @@ import { useChat } from '../context/ChatContext';
 import Sidebar from '../components/sidebar/Sidebar';
 import ChatWindow from '../components/chat/ChatWindow';
 import ConnectionBanner from '../components/common/ConnectionBanner';
+import { ProfileProvider } from '../context/ProfileContext';
 import { OPEN_CONVERSATION_EVENT, useInstallPrompt } from '../lib/pwa';
 import toast from 'react-hot-toast';
 import { useBackClose } from '../lib/backStack';
@@ -122,6 +123,7 @@ export default function Home() {
   const chatKey = current?.isGroup ? `g_${current._id}` : other?._id;
 
   return (
+    <ProfileProvider onMessage={openUser}>
     <div className={`app-shell${current ? ' chat-open' : ''}`}>
       <ConnectionBanner />
       <Sidebar
@@ -147,5 +149,6 @@ export default function Home() {
         )}
       </main>
     </div>
+    </ProfileProvider>
   );
 }

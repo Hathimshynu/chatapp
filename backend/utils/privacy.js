@@ -1,13 +1,25 @@
 // Blocking + privacy rules, enforced on the server for every viewer.
-// "Contacts" = people you have a direct (1:1) chat with — the relation is symmetric.
+// "Contacts" = your friends plus people you have a direct (1:1) chat with — symmetric.
 const Block = require('../models/Block');
 const Conversation = require('../models/Conversation');
+const Friendship = require('../models/Friendship');
 
 const idStr = (value) => String(value?._id || value);
 
+const friendIdsOf = async (userId) => {
+  const rows = await Friendship.find({ status: 'accepted', $or: [{ requester: userId }, { recipient: userId }] })
+    .select('requester recipient').lean();
+  return new Set(rows.map(r => (idStr(r.requester) === String(userId) ? idStr(r.recipient) : idStr(r.requester))));
+};
+
 const contactIdsOf = async (userId) => {
-  const ids = await Conversation.find({ isGroup: { $ne: true }, participants: userId }).distinct('participants');
-  return new Set(ids.map(String).filter(id => id !== String(userId)));
+  const [chatIds, friends] = await Promise.all([
+    Conversation.find({ isGroup: { $ne: true }, participants: userId }).distinct('participants'),
+    friendIdsOf(userId)
+  ]);
+  const ids = new Set(chatIds.map(String).filter(id => id !== String(userId)));
+  friends.forEach(id => ids.add(id));
+  return ids;
 };
 
 // Everyone who shares any conversation (direct or group) with the user.
@@ -89,6 +101,7 @@ const maskReads = (message, viewerId, hidden) => {
 };
 
 module.exports = {
+  friendIdsOf,
   contactIdsOf, coParticipantIdsOf, blockedWith, isBlockedEitherWay, allowed,
   viewerContext, maskUser, canSeeOnline, hiddenReadersFor, hiddenReadersForConversation, maskReads, idStr
 };

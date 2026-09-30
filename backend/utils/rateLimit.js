@@ -56,7 +56,8 @@ const LIMITS = {
   groupInvite: { name: 'group-invite', windowMs: 60 * 60 * 1000, max: 30 },
   groupMembers: { name: 'group-members', windowMs: 60 * 60 * 1000, max: 60 },
   pushSubscribe: { name: 'push-subscribe', windowMs: 60 * 60 * 1000, max: 20 },
-  block: { name: 'block', windowMs: 60 * 60 * 1000, max: 60 }
+  block: { name: 'block', windowMs: 60 * 60 * 1000, max: 60 },
+  friendRequest: { name: 'friend-request', windowMs: 60 * 60 * 1000, max: 50, message: 'You are sending too many friend requests. Please try later.' }
 };
 
 module.exports = { rateLimit, allowSocketEvent, LIMITS };

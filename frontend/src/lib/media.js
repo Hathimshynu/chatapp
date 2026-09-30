@@ -58,3 +58,15 @@ export const pickRecorderMimeType = () => {
   const candidates = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm'];
   return candidates.find(type => MediaRecorder.isTypeSupported?.(type)) || '';
 };
+
+// Camera/microphone only exist on secure pages (https:// or localhost). Returns a
+// user-facing reason when calls can't work on this page, otherwise null.
+export const callsUnavailableReason = () => {
+  if (typeof window === 'undefined') return null;
+  if (!window.isSecureContext) {
+    return 'Calls need a secure connection. Open ChatApp with https:// (or on localhost) to use the camera and microphone.';
+  }
+  if (!navigator.mediaDevices?.getUserMedia) return 'This browser does not support calls. Try the latest Chrome, Safari, Edge or Firefox.';
+  if (typeof RTCPeerConnection === 'undefined') return 'This browser does not support calls. Try the latest Chrome, Safari, Edge or Firefox.';
+  return null;
+};
