@@ -33,7 +33,8 @@ function PersonRow({ person, subtitle, children }) {
 }
 
 export default function FriendsPanel({ onOpenUser }) {
-  const { friends, incoming, outgoing, loaded } = useFriends();
+  const { friends, incoming, outgoing, loaded, relationOf, dismissed } = useFriends();
+  const [suggested, setSuggested] = useState([]);
   const [query, setQuery] = useState('');
   const [found, setFound] = useState({ query: '', users: [] });
   const trimmed = query.trim();
@@ -51,6 +52,19 @@ export default function FriendsPanel({ onOpenUser }) {
     }, 250);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [trimmed]);
+
+  // "People you may know": refreshed when your friends change. Rows stay after you tap
+  // Add friend (the button turns into Cancel request) and drop out once you're friends.
+  useEffect(() => {
+    let cancelled = false;
+    axios.get('/api/friends/suggestions')
+      .then(({ data }) => { if (!cancelled && Array.isArray(data)) setSuggested(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [friends.length]);
+  const suggestions = suggested
+    .filter(p => !['friends', 'incoming'].includes(relationOf(p._id).state) && !dismissed.has(String(p._id)))
+    .slice(0, 8);
 
   const message = (person) => (e) => { e.stopPropagation(); onOpenUser(person); };
 
@@ -120,7 +134,24 @@ export default function FriendsPanel({ onOpenUser }) {
               </>
             )}
 
-            {loaded && !friends.length && !incoming.length && !outgoing.length && (
+            {suggestions.length > 0 && (
+              <>
+                <div className="list-section">People you may know</div>
+                {suggestions.map(person => (
+                  <PersonRow
+                    key={person._id}
+                    person={person}
+                    subtitle={person.mutualFriends > 0
+                      ? `${person.mutualFriends} mutual friend${person.mutualFriends > 1 ? 's' : ''}`
+                      : 'In your chats or groups'}
+                  >
+                    <FriendButton user={person} />
+                  </PersonRow>
+                ))}
+              </>
+            )}
+
+            {loaded && !friends.length && !incoming.length && !outgoing.length && !suggestions.length && (
               <div className="empty-state">
                 <div className="empty-icon"><Users size={28} /></div>
                 <h3>Find your friends</h3>

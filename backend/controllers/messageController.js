@@ -14,7 +14,8 @@ const {
   broadcastMessageUpdate,
   memberJoinedAt,
   visibleSinceFilter,
-  isVisibleTo
+  isVisibleTo,
+  loadMessage
 } = require('../services/messages');
 const { populateConversation, shapeConversation, shapeForViewer, can } = require('../services/groups');
 const {
@@ -213,6 +214,18 @@ const sendMessage = async (req, res) => {
       if (original) replyToId = replyTo;
     }
 
+    // Idempotent retries: the same clientId from the same sender in this chat returns the
+    // message already stored (e.g. the first attempt arrived but its response was lost),
+    // so resending from the offline outbox never creates duplicates.
+    const cleanClientId = typeof clientId === 'string' ? clientId.slice(0, 64) : '';
+    if (cleanClientId && !created) {
+      const existing = await Message.findOne({ conversationId: conversation._id, sender: req.user._id, clientId: cleanClientId })
+        .select('_id').lean();
+      if (existing) {
+        return res.status(200).json({ message: serializeMessage(await loadMessage(existing._id)), conversationId: conversation._id, duplicate: true });
+      }
+    }
+
     const message = await createAndBroadcastMessage({
       conversation,
       senderId: req.user._id,
@@ -223,7 +236,7 @@ const sendMessage = async (req, res) => {
         media,
         replyTo: replyToId,
         forwarded: !!forwarded,
-        clientId: typeof clientId === 'string' ? clientId.slice(0, 64) : ''
+        clientId: cleanClientId
       }
     });
 

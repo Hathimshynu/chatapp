@@ -20,7 +20,11 @@ Express + MongoDB API, Socket.IO realtime server, media storage and Agora token 
 | `controllers/groupController.js`, `services/groups.js` | Groups: members, roles, permissions, invite links, leave/delete, membership cache |
 | `controllers/statusController.js` | Status: feed, visibility rules, views, replies/reactions, expiry |
 | `routes/search.js` | Regex-escaped search over people, my groups and my messages |
-| `services/push.js`, `routes/push.js` | Web Push (VAPID) for users with no open app |
+| `services/push.js`, `routes/push.js` | Web Push (VAPID) for users with no open app; `notifyUser` for one-off pushes (friend requests) |
+
+## Sending is idempotent
+
+`POST /api/messages/send` accepts a `clientId` (the client's id for the message). If the same sender has already sent a message with that `clientId` in that chat, the server returns the stored message with `200` and `duplicate: true` instead of creating another one, so offline resends and retries after a lost response never duplicate messages.
 
 ## Socket events
 
@@ -56,6 +60,7 @@ The client connects with `io(url, { auth: { token } })`.
 |---|---|---|---|
 | GET | `/api/friends` | me | My friends (privacy-masked) |
 | GET | `/api/friends/requests` | me | `{ incoming, outgoing }` pending requests |
+| GET | `/api/friends/suggestions` | me | "People you may know": up to 20 users with `mutualFriends` |
 | POST | `/api/friends/requests` `{ userId }` | anyone | `201` sent · `200` friends (they had asked you) · `400` self/invalid · `403` blocked · `404` no user · `409` already sent/friends · `429` |
 | POST | `/api/friends/requests/:id/accept` | recipient only | `200` friends · `404` otherwise |
 | POST | `/api/friends/requests/:id/decline` | recipient only | `200` · `404` otherwise |

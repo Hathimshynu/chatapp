@@ -65,6 +65,19 @@ const persistActiveId = (id) => {
   }
 };
 
+// Logging out of an account on this device removes what it left behind: unsent
+// messages, drafts and its last status-privacy choice (other accounts are untouched).
+const clearAccountData = (id) => {
+  try {
+    const prefixes = [`chatOutbox:${id}`, `chatDraft:${id}:`, `chatStatusPrivacy:${id}`, `chatSuggestDismissed:${id}`];
+    Object.keys(localStorage)
+      .filter(k => prefixes.some(p => k === p || k.startsWith(p)))
+      .forEach(k => localStorage.removeItem(k));
+  } catch {
+    // storage unavailable
+  }
+};
+
 const pickAccountFields = (data) => ({
   _id: data._id,
   name: data.name,
@@ -132,7 +145,10 @@ export const AuthProvider = ({ children }) => {
   // (skipped when the session already expired — the server would reject it anyway).
   const removeAccount = useCallback((id, { sessionExpired = false } = {}) => {
     const account = accounts.find(a => a._id === id);
-    if (account && !sessionExpired) disablePush(account.token).catch(() => {});
+    if (account && !sessionExpired) {
+      disablePush(account.token).catch(() => {});
+      clearAccountData(id); // a session that merely expired keeps its unsent messages for the next sign-in
+    }
     const remaining = accounts.filter(a => a._id !== id);
     commitAccounts(remaining);
     if (id === activeId) activate(remaining[0] || null);
@@ -143,7 +159,10 @@ export const AuthProvider = ({ children }) => {
   }, [activeId, removeAccount]);
 
   const logoutAll = useCallback(() => {
-    accounts.forEach(a => disablePush(a.token).catch(() => {}));
+    accounts.forEach(a => {
+      disablePush(a.token).catch(() => {});
+      clearAccountData(a._id);
+    });
     commitAccounts([]);
     activate(null);
   }, [accounts, commitAccounts, activate]);

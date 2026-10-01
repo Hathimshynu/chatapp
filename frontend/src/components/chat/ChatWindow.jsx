@@ -23,6 +23,7 @@ import { errorMessage, uploadMedia } from '../../lib/api';
 import { formatDayLabel, formatLastSeen, isSameDay, systemText, typingLabel } from '../../lib/format';
 import { attachmentKind, compressImage, readVideoMeta } from '../../lib/media';
 import { playSentSound } from '../../lib/sounds';
+import { dequeueMessage, inFlight, isRetryable, markRejected, outboxFor, queueMessage } from '../../lib/outbox';
 
 // Rarely opened panels load on demand.
 const GroupInfoPanel = lazy(() => import('./GroupInfoPanel'));
@@ -51,8 +52,6 @@ const pageOf = (data) => (Array.isArray(data)
   ? { messages: data, hasMore: false }
   : { messages: Array.isArray(data?.messages) ? data.messages : [], hasMore: !!data?.hasMore });
 
-// Worth retrying automatically once we're back online (no response, server error or rate limit).
-const isRetryable = (error) => !error?.response || error.response.status >= 500 || error.response.status === 429;
 
 const SENDER_COLORS = ['#6366f1', '#0ea5e9', '#ec4899', '#f59e0b', '#10b981', '#f43f5e', '#8b5cf6', '#14b8a6', '#f97316', '#3b82f6'];
 const senderColor = (id = '') => SENDER_COLORS[[...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % SENDER_COLORS.length];
@@ -85,7 +84,12 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   const activeGroupCall = isGroup ? groupCalls?.activeCalls[convId] : null;
   const inThisGroupCall = !!activeGroupCall && groupCalls?.groupCall?.callId === activeGroupCall.callId;
 
-  const [messages, setMessages] = useState([]);
+  // Starts with any messages still queued for this chat from an earlier session
+  // (sent while offline, then the app was closed); they are resent below.
+  const [messages, setMessages] = useState(() => outboxFor(myId, {
+    conversationId: isTemp ? null : convId,
+    receiverId: !isGroup && other?._id ? String(other._id) : null
+  }).map(e => ({ ...e.message, _id: e.clientId, clientId: e.clientId, status: 'failed', autoRetry: !e.rejected })).sort(byTime));
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(!isTemp);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -148,9 +152,11 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   }, [chat.markRead]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load latest page ─────────────────────────────────────────────
+  const loadedOkRef = useRef(false); // has this chat's history ever loaded?
   const fetchLatest = useCallback(async ({ merge = false } = {}) => {
     if (isTempRef.current) return;
     const { data } = await axios.get(`/api/messages/${convIdRef.current}`, { params: { limit: PAGE_SIZE } });
+    loadedOkRef.current = true;
     const page = pageOf(data);
     setMessages(prev => (merge ? mergeLists(prev, page.messages) : mergeLists(prev.filter(m => m.status), page.messages)));
     if (!merge) setHasMore(page.hasMore);
@@ -177,7 +183,11 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
     if (!socket) return;
     let first = true;
     const onConnect = () => {
-      if (first) { first = false; return; }
+      // Skip the first connect only if the history already loaded (it didn't if we opened offline).
+      if (first) {
+        first = false;
+        if (loadedOkRef.current) return;
+      }
       fetchLatest({ merge: true }).catch(() => {});
       markReadSoon();
     };
@@ -369,23 +379,38 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
     setMessages(prev => prev.map(m => (m.clientId === clientId && m.status ? { ...m, ...patch } : m)));
   };
 
-  const deliver = useCallback(async (clientId, body) => {
+  // Send one message. It is queued in the per-account outbox first, so it survives a
+  // reload while offline; it leaves the outbox once the server has it.
+  const deliver = useCallback(async (clientId, body, optimistic) => {
     retryBodies.current.set(clientId, body);
+    if (inFlight.has(clientId)) return;
+    inFlight.add(clientId);
+    queueMessage(myId, {
+      clientId,
+      conversationId: isTempRef.current ? null : convIdRef.current,
+      receiverId: !isGroup && other?._id ? String(other._id) : null,
+      body,
+      message: optimistic || messagesRef.current.find(m => m.clientId === clientId)
+    });
     try {
       const data = await postMessage({ ...body, clientId });
       retryBodies.current.delete(clientId);
+      dequeueMessage(myId, clientId);
       scrollModeRef.current = null;
       const sent = data?.message || (data?._id ? data : null); // older servers returned the message itself
       if (sent) setMessages(prev => reconcile(prev, sent));
       playSentSound();
     } catch (error) {
       const autoRetry = isRetryable(error);
+      // Rejected for good (blocked, too long, …): keep it with "Tap to retry", but stop auto-retrying.
+      if (!autoRetry) markRejected(myId, clientId);
       patchLocal(clientId, { status: 'failed', autoRetry });
       if (!autoRetry || navigator.onLine) toast.error(errorMessage(error, 'Message not sent'));
     } finally {
       retrying.current.delete(clientId);
+      inFlight.delete(clientId);
     }
-  }, [postMessage]);
+  }, [postMessage, myId, isGroup, other?._id]);
 
   const optimisticBase = (extra) => {
     const clientId = newClientId();
@@ -408,7 +433,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
     const message = optimisticBase({ text, messageType: 'text' });
     addOptimistic(message);
     setReplyTo(null);
-    deliver(message.clientId, { text, messageType: 'text', replyTo: replyTo?._id });
+    deliver(message.clientId, { text, messageType: 'text', replyTo: replyTo?._id }, message);
   };
 
   const sendFile = async (file, caption, replyId) => {
@@ -470,7 +495,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
     const message = optimisticBase({ messageType: 'sticker', media });
     addOptimistic(message);
     setReplyTo(null);
-    deliver(message.clientId, { messageType: 'sticker', media, replyTo: replyTo?._id });
+    deliver(message.clientId, { messageType: 'sticker', media, replyTo: replyTo?._id }, message);
   };
 
   const sendVoice = (blob, duration) => {
@@ -517,6 +542,20 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
       socket?.off('connect', retryFailed);
     };
   }, [socket, retryFailed]);
+
+  // Messages queued for this chat in an earlier session (e.g. sent offline, then the app
+  // was closed): show them again and resend. The server ignores a copy it already has.
+  useEffect(() => {
+    const pending = outboxFor(myId, {
+      conversationId: isTemp ? null : convId,
+      receiverId: !isGroup && other?._id ? String(other._id) : null
+    });
+    if (!pending.length) return undefined;
+    pending.forEach(e => retryBodies.current.set(e.clientId, e.body));
+    const timer = setTimeout(() => { if (navigator.onLine) retryFailed(); }, 600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convId, myId]);
 
   const retry = useCallback((message) => {
     const body = retryBodies.current.get(message.clientId);

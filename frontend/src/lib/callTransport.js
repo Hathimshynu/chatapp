@@ -10,7 +10,8 @@
 // VITE_CALL_RELAY: 'auto' (default) | 'always' | 'never'
 
 export const RELAY_PROXY_MODE = 5; // Agora: force TCP (TLS 443) cloud proxy
-export const MEDIA_CHECK_MS = 7000; // time the other side's media gets to arrive
+// Time the other side's media gets to arrive. Healthy connections deliver it within 1–2 s.
+export const MEDIA_CHECK_MS = 5000;
 
 const MODE = String(import.meta.env.VITE_CALL_RELAY || 'auto').toLowerCase();
 const KEY = 'chatCallRelayAt';

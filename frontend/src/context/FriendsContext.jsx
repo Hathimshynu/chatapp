@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { useSocket, useSocketEvent } from './SocketContext';
+import { useAuth } from './AuthContext';
 import { errorMessage } from '../lib/api';
 import { showNotification } from '../lib/notify';
 
@@ -59,9 +60,25 @@ export const FriendsProvider = ({ children }) => {
 
   const sendRequest = useCallback((user) => act(() => axios.post('/api/friends/requests', { userId: user._id }), `Friend request sent to ${user.name.split(' ')[0]}`), [act]);
   const accept = useCallback((requestId, name) => act(() => axios.post(`/api/friends/requests/${requestId}/accept`), name ? `You and ${name.split(' ')[0]} are now friends` : null), [act]);
-  const decline = useCallback((requestId) => act(() => axios.post(`/api/friends/requests/${requestId}/decline`)), [act]);
-  const cancel = useCallback((requestId) => act(() => axios.delete(`/api/friends/requests/${requestId}`)), [act]);
-  const unfriend = useCallback((user) => act(() => axios.delete(`/api/friends/${user._id}`), `Removed ${user.name.split(' ')[0]} from friends`), [act]);
+  // People you declined, cancelled or unfriended are no longer offered under
+  // "People you may know" (remembered per account on this device).
+  const { user: me } = useAuth();
+  const dismissKey = `chatSuggestDismissed:${me?._id}`;
+  const [dismissed, setDismissed] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(dismissKey) || '[]')); } catch { return new Set(); }
+  });
+  const dismiss = useCallback((userId) => {
+    if (!userId) return;
+    setDismissed(prev => {
+      const next = new Set(prev).add(String(userId));
+      try { localStorage.setItem(dismissKey, JSON.stringify([...next].slice(-500))); } catch { /* storage full */ }
+      return next;
+    });
+  }, [dismissKey]);
+
+  const decline = useCallback((requestId, userId) => { dismiss(userId); return act(() => axios.post(`/api/friends/requests/${requestId}/decline`)); }, [act, dismiss]);
+  const cancel = useCallback((requestId, userId) => { dismiss(userId); return act(() => axios.delete(`/api/friends/requests/${requestId}`)); }, [act, dismiss]);
+  const unfriend = useCallback((user) => { dismiss(user._id); return act(() => axios.delete(`/api/friends/${user._id}`), `Removed ${user.name.split(' ')[0]} from friends`); }, [act, dismiss]);
 
   // Local view of the relationship with someone (kept in sync by the lists above).
   const relationOf = useCallback((userId) => {
@@ -76,8 +93,8 @@ export const FriendsProvider = ({ children }) => {
   }, [friends, incoming, outgoing]);
 
   const value = useMemo(() => ({
-    friends, incoming, outgoing, loaded, refresh, relationOf, sendRequest, accept, decline, cancel, unfriend
-  }), [friends, incoming, outgoing, loaded, refresh, relationOf, sendRequest, accept, decline, cancel, unfriend]);
+    friends, incoming, outgoing, loaded, refresh, relationOf, sendRequest, accept, decline, cancel, unfriend, dismissed
+  }), [friends, incoming, outgoing, loaded, refresh, relationOf, sendRequest, accept, decline, cancel, unfriend, dismissed]);
 
   return <FriendsContext.Provider value={value}>{children}</FriendsContext.Provider>;
 };

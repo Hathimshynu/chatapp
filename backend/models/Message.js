@@ -127,5 +127,8 @@ const messageSchema = new mongoose.Schema(
 
 messageSchema.index({ conversationId: 1, createdAt: -1 });
 messageSchema.index({ conversationId: 1, seen: 1 });
+// Duplicate-send check (same sender + clientId in a chat). Partial: only messages that carry a clientId.
+// Not unique on purpose, so building it can't fail on older data that already contains duplicates.
+messageSchema.index({ conversationId: 1, sender: 1, clientId: 1 }, { partialFilterExpression: { clientId: { $gt: '' } } });
 
 module.exports = mongoose.model("Message", messageSchema);

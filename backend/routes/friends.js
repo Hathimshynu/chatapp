@@ -7,6 +7,7 @@ const router = express.Router();
 
 router.get('/', protect, friends.listFriends);
 router.get('/requests', protect, friends.listRequests);
+router.get('/suggestions', protect, rateLimit(LIMITS.search), friends.suggestions);
 router.post('/requests', protect, rateLimit(LIMITS.friendRequest), friends.sendRequest);
 router.post('/requests/:id/accept', protect, friends.acceptRequest);
 router.post('/requests/:id/decline', protect, friends.declineRequest);

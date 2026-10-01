@@ -8,6 +8,7 @@ import { playMessageSound } from '../lib/sounds';
 import { showNotification } from '../lib/notify';
 import { errorMessage, mediaUrl } from '../lib/api';
 import useLatest from '../hooks/useLatest';
+import { dequeueMessage, inFlight, isRetryable, markRejected, readOutbox } from '../lib/outbox';
 
 const ChatContext = createContext(null);
 
@@ -49,12 +50,15 @@ export const ChatProvider = ({ children }) => {
     return { title: other?.name || 'Unknown', avatarUser: other, isGroup: false, other };
   }, [otherParticipant]);
 
+  const loadedOkRef = useRef(false); // has the chat list ever loaded successfully?
   const refresh = useCallback(async () => {
     try {
       const { data } = await axios.get('/api/messages/conversations');
+      if (!Array.isArray(data)) return;
       setConversations(sortConversations(data.map(c =>
         String(c._id) === activeIdRef.current ? { ...c, unreadCount: 0 } : c
       )));
+      loadedOkRef.current = true;
     } catch (error) {
       if (error.response?.status !== 401) console.error('Failed to load chats', error);
     } finally {
@@ -69,7 +73,12 @@ export const ChatProvider = ({ children }) => {
     if (!socket) return;
     let first = true;
     const onConnect = () => {
-      if (first) { first = false; return; }
+      // The first connect needs no catch-up — unless the app started offline and the
+      // initial load failed, in which case this is the moment to load the chat list.
+      if (first) {
+        first = false;
+        if (loadedOkRef.current) return;
+      }
       refresh();
     };
     socket.on('connect', onConnect);
@@ -92,6 +101,45 @@ export const ChatProvider = ({ children }) => {
       { unreadCount: 0, ...conversation }
     ]));
   }, []);
+
+  // Send messages left in the outbox (written offline, possibly in an earlier session)
+  // for chats that aren't open — the open chat resends its own. One at a time, in order;
+  // stops at the first network failure and tries again on the next reconnect.
+  const flushOutbox = useCallback(async () => {
+    if (!navigator.onLine) return;
+    for (const entry of readOutbox(myId)) {
+      if (entry.rejected || inFlight.has(entry.clientId)) continue;
+      if (entry.conversationId && entry.conversationId === activeIdRef.current) continue;
+      inFlight.add(entry.clientId);
+      try {
+        const target = entry.conversationId ? { conversationId: entry.conversationId } : { receiverId: entry.receiverId };
+        const { data } = await axios.post('/api/messages/send', { ...entry.body, ...target, clientId: entry.clientId });
+        dequeueMessage(myId, entry.clientId);
+        if (data?.conversation) upsertConversation(data.conversation);
+      } catch (error) {
+        if (!isRetryable(error)) {
+          markRejected(myId, entry.clientId);
+          continue;
+        }
+        break; // offline / server down — try again later
+      } finally {
+        inFlight.delete(entry.clientId);
+      }
+    }
+  }, [myId, upsertConversation]);
+
+  useEffect(() => {
+    if (!socket) return undefined;
+    const run = () => { flushOutbox(); };
+    const initial = setTimeout(run, 1500); // after the open chat (if any) has claimed its own
+    socket.on('connect', run);
+    window.addEventListener('online', run);
+    return () => {
+      clearTimeout(initial);
+      socket.off('connect', run);
+      window.removeEventListener('online', run);
+    };
+  }, [socket, flushOutbox]);
 
   const clearTyping = useCallback((conversationId, userId) => {
     const ids = userId ? [String(userId)] : Object.keys(typingTimers.current)

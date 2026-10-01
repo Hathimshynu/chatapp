@@ -1,12 +1,30 @@
 /* ChatApp service worker — makes the app installable, loads instantly and
    shows notifications. API calls and sockets always go to the network. */
-const VERSION = 'v3';
+const VERSION = 'v4';
 const SHELL_CACHE = `chatapp-shell-${VERSION}`;
 const ASSET_CACHE = `chatapp-assets-${VERSION}`;
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/favicon.png', '/icons/icon-192.png', '/icons/icon-512.png'];
 
+// The page loads its main JS/CSS before this worker controls it, so those files would
+// never pass through the fetch handler below. Cache the bundles index.html references
+// at install time, otherwise an offline reload finds the page but not its scripts.
+const cacheEntryAssets = async () => {
+  try {
+    const html = await (await fetch('/index.html', { cache: 'no-cache' })).text();
+    const assets = [...new Set([...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map(m => m[1]))];
+    if (assets.length) await (await caches.open(ASSET_CACHE)).addAll(assets);
+  } catch {
+    // offline during install — the fetch handler caches assets as they load
+  }
+};
+
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(SHELL_CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(
+    caches.open(SHELL_CACHE)
+      .then(cache => cache.addAll(SHELL))
+      .then(cacheEntryAssets)
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', (event) => {
@@ -33,7 +51,7 @@ self.addEventListener('fetch', (event) => {
           caches.open(SHELL_CACHE).then(cache => cache.put('/index.html', copy));
           return response;
         })
-        .catch(() => caches.match('/index.html'))
+        .catch(() => caches.match('/index.html', { ignoreVary: true }))
     );
     return;
   }
@@ -41,7 +59,8 @@ self.addEventListener('fetch', (event) => {
   // Hashed build assets never change: cache first.
   if (url.pathname.startsWith('/assets/')) {
     event.respondWith(
-      caches.match(request).then(cached => cached || fetch(request).then(response => {
+      // ignoreVary: module scripts carry an Origin header the install-time copies don't; hashed files are immutable.
+      caches.match(request, { ignoreVary: true }).then(cached => cached || fetch(request).then(response => {
         if (response.ok) {
           const copy = response.clone();
           caches.open(ASSET_CACHE).then(cache => cache.put(request, copy));

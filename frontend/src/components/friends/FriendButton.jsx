@@ -50,7 +50,7 @@ export default function FriendButton({ user, size = 'sm', showUnfriend = false }
         <button type="button" className={`${cls} btn-primary`} disabled={busy} onClick={run(() => accept(relation.requestId, user.name))} aria-label={`Accept friend request from ${user.name}`}>
           <Check size={15} /> Accept
         </button>
-        <button type="button" className={`${cls} btn-ghost`} disabled={busy} onClick={run(() => decline(relation.requestId))} aria-label={`Delete friend request from ${user.name}`}>
+        <button type="button" className={`${cls} btn-ghost`} disabled={busy} onClick={run(() => decline(relation.requestId, user._id))} aria-label={`Delete friend request from ${user.name}`}>
           <X size={15} /> Delete
         </button>
       </span>
@@ -58,7 +58,7 @@ export default function FriendButton({ user, size = 'sm', showUnfriend = false }
   }
   if (relation.state === 'outgoing') {
     return (
-      <button type="button" className={`${cls} btn-ghost friend-requested`} disabled={busy} onClick={run(() => cancel(relation.requestId))} aria-label={`Cancel friend request to ${user.name}`}>
+      <button type="button" className={`${cls} btn-ghost friend-requested`} disabled={busy} onClick={run(() => cancel(relation.requestId, user._id))} aria-label={`Cancel friend request to ${user.name}`}>
         <UserX size={15} /> Cancel request
       </button>
     );
