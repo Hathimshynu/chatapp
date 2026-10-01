@@ -7,7 +7,9 @@ import { MAX_UPLOAD_BYTES } from '../../lib/api';
 
 // Full-screen preview with a caption before sending photos, videos or documents.
 export default function AttachmentPreview({ files, recipient, onSend, onClose, onAddMore }) {
-  const [index, setIndex] = useState(0);
+  const [selected, setIndex] = useState(0);
+  // Removing files can leave the selection past the end; clamp while rendering.
+  const index = Math.min(selected, Math.max(files.length - 1, 0));
   const [caption, setCaption] = useState('');
   // The effect owns its object URLs, so a StrictMode re-run can't revoke ones still in use.
   const [urls, setUrls] = useState([]);
@@ -16,7 +18,6 @@ export default function AttachmentPreview({ files, recipient, onSend, onClose, o
     setUrls(created);
     return () => created.forEach(url => URL.revokeObjectURL(url));
   }, [files]);
-  useEffect(() => { if (index >= files.length) setIndex(Math.max(files.length - 1, 0)); }, [files.length, index]);
 
   useEffect(() => {
     const onKey = (event) => { if (event.key === 'Escape') onClose(); };

@@ -24,6 +24,7 @@ import { formatDayLabel, formatLastSeen, isSameDay, systemText, typingLabel } fr
 import { attachmentKind, compressImage, readVideoMeta } from '../../lib/media';
 import { playSentSound } from '../../lib/sounds';
 import { dequeueMessage, inFlight, isRetryable, markRejected, outboxFor, queueMessage } from '../../lib/outbox';
+import { deleteUpload, isUploadRetryable, putUpload, sendBodyFor, uploading, uploadsFor } from '../../lib/pendingUploads';
 
 // Rarely opened panels load on demand.
 const GroupInfoPanel = lazy(() => import('./GroupInfoPanel'));
@@ -117,6 +118,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   const isTempRef = useRef(isTemp);
   const creatingRef = useRef(null);
   const retryBodies = useRef(new Map());
+  const pendingUploads = useRef(new Map()); // clientId -> attachment not uploaded yet
   const messagesRef = useRef([]);
   const retrying = useRef(new Set());
   const readTimer = useRef(null);
@@ -163,10 +165,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   }, []);
 
   useEffect(() => {
-    if (isTemp) {
-      setLoading(false);
-      return;
-    }
+    if (isTemp) return undefined; // a new chat starts with loading = false
     let cancelled = false;
     // After the first message creates the chat we already have it on screen — no skeleton.
     if (!creatingRef.current) setLoading(true);
@@ -436,6 +435,60 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
     deliver(message.clientId, { text, messageType: 'text', replyTo: replyTo?._id }, message);
   };
 
+  // Upload one attachment, then send it. The file stays in IndexedDB until the upload
+  // succeeds, so closing the app or losing the connection doesn't lose it.
+  const uploadAndDeliver = useCallback(async (record) => {
+    const { clientId } = record;
+    if (uploading.has(clientId)) return;
+    uploading.add(clientId);
+    patchLocal(clientId, { status: 'pending', uploadProgress: 0 });
+    try {
+      let lastReported = 0;
+      const uploaded = await uploadMedia(record.blob, {
+        name: record.name,
+        onProgress: (p) => {
+          if (p - lastReported >= 0.04 || p === 1) {
+            lastReported = p;
+            patchLocal(clientId, { uploadProgress: p });
+          }
+        }
+      });
+      pendingUploads.current.delete(clientId);
+      const sending = deliver(clientId, sendBodyFor(record, uploaded)); // queues the text outbox entry first
+      await deleteUpload(clientId);
+      await sending;
+    } catch (error) {
+      const autoRetry = isUploadRetryable(error);
+      if (!autoRetry) deleteUpload(clientId); // e.g. too large or a blocked file type — retrying won't help
+      patchLocal(clientId, { status: 'failed', autoRetry });
+      if (!autoRetry || navigator.onLine) {
+        toast.error(errorMessage(error, record.messageType === 'audio' ? 'Voice message not sent' : 'Upload failed'));
+      }
+    } finally {
+      uploading.delete(clientId);
+      retrying.current.delete(clientId);
+    }
+  }, [deliver]);
+
+  const queueUpload = (message, { blob, name, caption, replyId, mediaExtra }) => {
+    const record = {
+      clientId: message.clientId,
+      myId,
+      conversationId: isTempRef.current ? null : convIdRef.current,
+      receiverId: !isGroup && other?._id ? String(other._id) : null,
+      blob,
+      name,
+      messageType: message.messageType,
+      caption: caption || '',
+      replyTo: replyId,
+      mediaExtra,
+      message
+    };
+    pendingUploads.current.set(record.clientId, record);
+    putUpload(record);
+    return uploadAndDeliver(record);
+  };
+
   const sendFile = async (file, caption, replyId) => {
     const kind = attachmentKind(file);
     const messageType = kind === 'audio' ? 'file' : kind;
@@ -458,27 +511,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
       replyTo: null
     });
     addOptimistic(message);
-    try {
-      let lastReported = 0;
-      const uploaded = await uploadMedia(blob, {
-        name: file.name,
-        onProgress: (p) => {
-          if (p - lastReported >= 0.04 || p === 1) {
-            lastReported = p;
-            patchLocal(message.clientId, { uploadProgress: p });
-          }
-        }
-      });
-      await deliver(message.clientId, {
-        text: caption,
-        messageType,
-        replyTo: replyId,
-        media: { ...uploaded, name: file.name, ...meta }
-      });
-    } catch (error) {
-      patchLocal(message.clientId, { status: 'failed' });
-      toast.error(errorMessage(error, 'Upload failed'));
-    }
+    await queueUpload(message, { blob, name: file.name, caption, replyId, mediaExtra: { name: file.name, ...meta } });
   };
 
   const sendFiles = async (files, caption) => {
@@ -509,16 +542,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
     const replyId = replyTo?._id;
     setReplyTo(null);
     addOptimistic(message);
-    uploadMedia(file, { name: file.name })
-      .then(uploaded => deliver(message.clientId, {
-        messageType: 'audio',
-        replyTo: replyId,
-        media: { ...uploaded, duration: Math.round(duration * 10) / 10 }
-      }))
-      .catch(error => {
-        patchLocal(message.clientId, { status: 'failed' });
-        toast.error(errorMessage(error, 'Voice message not sent'));
-      });
+    queueUpload(message, { blob: file, name: file.name, replyId, mediaExtra: { duration: Math.round(duration * 10) / 10 } });
   };
 
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -526,13 +550,19 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
   // Back online → resend messages that failed because of the connection, in order.
   const retryFailed = useCallback(() => {
     messagesRef.current
-      .filter(m => m.status === 'failed' && m.autoRetry && retryBodies.current.has(m.clientId) && !retrying.current.has(m.clientId))
+      .filter(m => m.status === 'failed' && m.autoRetry && !retrying.current.has(m.clientId))
       .forEach(m => {
-        retrying.current.add(m.clientId);
-        patchLocal(m.clientId, { status: 'pending' });
-        deliver(m.clientId, retryBodies.current.get(m.clientId));
+        const upload = pendingUploads.current.get(m.clientId);
+        if (upload) {
+          retrying.current.add(m.clientId);
+          uploadAndDeliver(upload);
+        } else if (retryBodies.current.has(m.clientId)) {
+          retrying.current.add(m.clientId);
+          patchLocal(m.clientId, { status: 'pending' });
+          deliver(m.clientId, retryBodies.current.get(m.clientId));
+        }
       });
-  }, [deliver]);
+  }, [deliver, uploadAndDeliver]);
 
   useEffect(() => {
     window.addEventListener('online', retryFailed);
@@ -557,7 +587,45 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [convId, myId]);
 
+  // Attachments that were still waiting to upload when the app closed: show them again
+  // (with a fresh preview from the saved file) and send them once online.
+  useEffect(() => {
+    let cancelled = false;
+    uploadsFor(myId, {
+      conversationId: isTemp ? null : convId,
+      receiverId: !isGroup && other?._id ? String(other._id) : null
+    }).then(records => {
+      const fresh = records.filter(r => !pendingUploads.current.has(r.clientId) && !uploading.has(r.clientId));
+      if (cancelled || !fresh.length) return;
+      fresh.forEach(r => pendingUploads.current.set(r.clientId, r));
+      setMessages(prev => {
+        const known = new Set(prev.map(m => m.clientId).filter(Boolean));
+        const restored = fresh.filter(r => !known.has(r.clientId)).map(r => {
+          const localUrl = URL.createObjectURL(r.blob);
+          return {
+            ...r.message,
+            _id: r.clientId,
+            clientId: r.clientId,
+            localUrl,
+            media: { ...r.message?.media, url: localUrl },
+            status: 'failed',
+            autoRetry: true
+          };
+        });
+        return restored.length ? [...prev, ...restored].sort(byTime) : prev;
+      });
+      setTimeout(() => { if (!cancelled && navigator.onLine) retryFailed(); }, 600);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convId, myId]);
+
   const retry = useCallback((message) => {
+    const upload = pendingUploads.current.get(message.clientId);
+    if (upload) {
+      uploadAndDeliver(upload);
+      return;
+    }
     const body = retryBodies.current.get(message.clientId);
     if (!body) {
       toast.error('Please send this again');
@@ -566,7 +634,7 @@ export default function ChatWindow({ conversation, onBack, onConversationCreated
     }
     patchLocal(message.clientId, { status: 'pending' });
     deliver(message.clientId, body);
-  }, [deliver]);
+  }, [deliver, uploadAndDeliver]);
 
   // ── Message actions ──────────────────────────────────────────────
   const submitEdit = async (text) => {

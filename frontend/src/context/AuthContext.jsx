@@ -3,6 +3,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { setAuthToken } from '../lib/api';
 import { disablePush } from '../lib/push';
+import { clearUploads } from '../lib/pendingUploads';
 import useLatest from '../hooks/useLatest';
 
 // Several signed-in accounts can live on one device (like Instagram/WhatsApp).
@@ -76,6 +77,7 @@ const clearAccountData = (id) => {
   } catch {
     // storage unavailable
   }
+  clearUploads(id).catch(() => {}); // attachments still waiting to upload (IndexedDB)
 };
 
 const pickAccountFields = (data) => ({

@@ -24,7 +24,7 @@ Real-time messaging with friends, groups, statuses and HD voice & video calls. W
 - Drafts saved per chat and per account, links are clickable, 1–3 emoji messages show large
 - Pin, mute, **archive** and clear chats; filter by All / Unread / Groups / Online / Pinned
 - Archived chats stay archived when new messages arrive; their unread count shows on the "Archived" row. Archiving is per user and syncs across your devices.
-- Offline-safe: a banner shows when you are offline or reconnecting. Messages sent meanwhile stay on screen as "Not sent" and are kept in an outbox on the device (per account), so they survive closing or reloading the app; they are sent automatically when the connection returns, even if that chat isn't open. The server ignores a repeat of a message it already has, so a flaky connection never creates duplicates. Logging out clears that account's unsent messages and drafts from the device.
+- Offline-safe: a banner shows when you are offline or reconnecting. Messages sent meanwhile stay on screen as "Not sent" and are kept in an outbox on the device (per account) — text and stickers in local storage, photos, videos, documents and voice notes in IndexedDB — so they survive closing or reloading the app; they are sent automatically when the connection returns, even if that chat isn't open. The server ignores a repeat of a message it already has, so a flaky connection never creates duplicates. Tapping **Retry** on a failed attachment uploads it again. Logging out clears that account's unsent messages, attachments and drafts from the device.
 - The installed app opens without a connection (cached app shell and code) and loads your chats as soon as you're back online
 - Unread counts come from the server and appear in the tab title and on the installed app's icon
 - Search across chats, groups (by name or member), people and message text/sender; jumps to the matching message. Special characters such as `( ) [ ] * + ? . \` are matched literally.
@@ -198,7 +198,7 @@ Per user when signed in, otherwise per IP address. Fixed windows, kept in memory
 | 1:1 and group calls (Agora), relay fallback | ✅ | ✅ signalling, tokens, and media flow with a synthetic 1280×720 camera through real Agora servers (direct and relay) | Agora App ID/Certificate | ✅ real camera video on phones |
 | Web Push (app closed) | ✅ | ✅ server side (sending, encryption, no duplicates, muted chats, missing/invalid keys) and in Chrome: a push delivered to the real service worker shows the right notification, collapses per chat, survives a malformed payload, and opens the chat | VAPID keys | ✅ delivery through real push services on phones |
 | Installable PWA | ✅ | ✅ Chrome installability check; app reloads fully offline | HTTPS hosting | install on iOS/Android |
-| Offline outbox | ✅ | ✅ send offline → reload offline → reconnect: delivered exactly once; logout clears it | — | — |
+| Offline outbox (text and attachments) | ✅ | ✅ send offline → reload offline → reconnect: delivered exactly once; Retry re-uploads; logout clears it | — | — |
 
 ## Verifying calls on real devices
 
@@ -225,7 +225,6 @@ Automated tests use a synthetic camera, so they confirm signalling and that medi
 - **Push on iPhone/iPad** only works once ChatApp is added to the Home Screen (iOS 16.4+).
 - Group size is capped at 256 members, and group calls at 8 participants.
 
-- Unsent **attachments** that were still uploading when the app closed are not kept (text, stickers and already-uploaded files are); send them again.
-- Dependencies: `npm audit` reports 0 issues in the backend. The frontend has 4 moderate advisories left: React Router's open-redirect issues (fixed only in React Router 7, a major upgrade — not reachable here because the only user-supplied path, the post-login `?next=`, is restricted to `/join/<code>`) and a `uuid` issue inside the Giphy library that only applies when a buffer is passed, which it isn't.
+- Dependencies: `npm audit` reports 0 known vulnerabilities in both the backend and the frontend (React Router 7; `uuid` pinned to a patched version for the Giphy library via `overrides` in `frontend/package.json`).
 
 **Not implemented:** end-to-end encryption, and native Play Store / App Store builds (the app installs as a PWA instead).

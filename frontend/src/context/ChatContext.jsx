@@ -6,9 +6,10 @@ import { useSocket, useSocketEvent } from './SocketContext';
 import { messagePreview } from '../lib/format';
 import { playMessageSound } from '../lib/sounds';
 import { showNotification } from '../lib/notify';
-import { errorMessage, mediaUrl } from '../lib/api';
+import { errorMessage, mediaUrl, uploadMedia } from '../lib/api';
 import useLatest from '../hooks/useLatest';
 import { dequeueMessage, inFlight, isRetryable, markRejected, readOutbox } from '../lib/outbox';
+import { deleteUpload, isUploadRetryable, sendBodyFor, uploading, uploadsOf } from '../lib/pendingUploads';
 
 const ChatContext = createContext(null);
 
@@ -124,6 +125,27 @@ export const ChatProvider = ({ children }) => {
         break; // offline / server down — try again later
       } finally {
         inFlight.delete(entry.clientId);
+      }
+    }
+    // Then attachments that never finished uploading (kept in IndexedDB).
+    for (const record of await uploadsOf(myId)) {
+      if (uploading.has(record.clientId)) continue;
+      if (record.conversationId && record.conversationId === activeIdRef.current) continue;
+      uploading.add(record.clientId);
+      try {
+        const uploaded = await uploadMedia(record.blob, { name: record.name });
+        const target = record.conversationId ? { conversationId: record.conversationId } : { receiverId: record.receiverId };
+        const { data } = await axios.post('/api/messages/send', { ...sendBodyFor(record, uploaded), ...target, clientId: record.clientId });
+        await deleteUpload(record.clientId);
+        if (data?.conversation) upsertConversation(data.conversation);
+      } catch (error) {
+        if (!isUploadRetryable(error) || (error?.response && !isRetryable(error))) {
+          await deleteUpload(record.clientId); // refused for good (too large, blocked, …)
+          continue;
+        }
+        break;
+      } finally {
+        uploading.delete(record.clientId);
       }
     }
   }, [myId, upsertConversation]);
